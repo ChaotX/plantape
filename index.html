@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Plantape</title>
+    <meta name="description" content="Measure up a garden with a tape measure; least-squares 3D point positions stored in Google Sheets.">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="js/app.js"></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand"><img src="favicon.svg" alt="" width="26" height="26"><span>Plantape</span></div>
+        <div class="garden-title" id="gardenTitle"></div>
+        <div class="topbar-right">
+            <button type="button" id="syncBadge" class="sync hidden"></button>
+            <select id="languageSelect" aria-label="Language"></select>
+            <button type="button" id="gardensButton" class="ghost-light hidden" data-i18n="gardens">Gardens</button>
+        </div>
+    </header>
+
+    <section id="startScreen" class="screen hidden">
+        <div class="card narrow">
+            <h1 data-i18n="appTitle">Measure your garden</h1>
+            <p data-i18n="appIntro"></p>
+            <ol class="steps">
+                <li data-i18n="step1"></li>
+                <li data-i18n="step2"></li>
+                <li data-i18n="step3"></li>
+            </ol>
+            <button type="button" id="signInButton" class="primary big" data-i18n="signIn">Sign in with Google</button>
+            <p id="notConfigured" class="notice hidden" data-i18n="notConfigured"></p>
+            <button type="button" id="localButton" class="secondary big" data-i18n="tryLocal">Use without Google</button>
+            <p id="startError" class="error hidden"></p>
+        </div>
+    </section>
+
+    <section id="gardenScreen" class="screen hidden">
+        <div class="card narrow">
+            <h2 data-i18n="chooseGarden">Gardens</h2>
+            <ul id="recentList" class="recent-list"></ul>
+            <button type="button" id="pickButton" class="primary google-only" data-i18n="openFromDrive">Open from Google Drive</button>
+            <form id="newGardenForm" class="inline-form">
+                <input id="newGardenName" type="text" required autocomplete="off" data-i18n-placeholder="newGardenPlaceholder">
+                <button type="submit" class="secondary" data-i18n="createGarden">Create</button>
+            </form>
+            <p class="muted small google-only" data-i18n="createGoogleHelp"></p>
+            <p class="muted small local-only" data-i18n="createLocalHelp"></p>
+            <details class="more">
+                <summary data-i18n="moreOptions">More options</summary>
+                <form id="openUrlForm" class="inline-form google-only">
+                    <input id="openUrlInput" type="text" autocomplete="off" data-i18n-placeholder="pasteLink">
+                    <button type="submit" data-i18n="open">Open</button>
+                </form>
+                <div class="row wrap">
+                    <label class="button file-button"><span data-i18n="importFile">Import file</span><input type="file" id="importInput" accept=".json,.csv,.txt,.tsv"></label>
+                    <button type="button" id="demoButton" data-i18n="loadDemo">Demo garden</button>
+                    <button type="button" id="signOutButton" class="ghost google-only" data-i18n="signOut">Sign out</button>
+                </div>
+                <p class="muted small" data-i18n="importHelp"></p>
+            </details>
+            <p id="gardenError" class="error hidden"></p>
+        </div>
+    </section>
+
+    <section id="mainScreen" class="screen hidden">
+        <div class="plan-wrap">
+            <svg id="plan" role="img" aria-label="Garden plan"></svg>
+            <div class="plan-tools">
+                <button type="button" id="fitButton" data-i18n-title="fit" title="Fit">⤢</button>
+                <button type="button" id="zoomInButton" title="+">+</button>
+                <button type="button" id="zoomOutButton" title="−">−</button>
+                <button type="button" id="layersButton" data-i18n-title="layers" title="Layers">☰</button>
+            </div>
+            <div id="layersMenu" class="layers hidden"></div>
+            <div id="planEmpty" class="plan-empty hidden" data-i18n="planEmpty"></div>
+        </div>
+        <aside class="side">
+            <nav class="tabs">
+                <button type="button" data-tab="measure" data-i18n="tabMeasure">Measure</button>
+                <button type="button" data-tab="hints"><span data-i18n="tabHints">Hints</span> <span id="hintsBadge" class="badge hidden"></span></button>
+                <button type="button" data-tab="points" data-i18n="tabPoints">Points</button>
+                <button type="button" data-tab="measurements" data-i18n="tabMeasurements">Measurements</button>
+                <button type="button" data-tab="settings" data-i18n="tabSettings">Settings</button>
+            </nav>
+            <div class="tab-body" id="tab-measure"></div>
+            <div class="tab-body hidden" id="tab-hints"></div>
+            <div class="tab-body hidden" id="tab-points"></div>
+            <div class="tab-body hidden" id="tab-measurements"></div>
+            <div class="tab-body hidden" id="tab-settings"></div>
+        </aside>
+    </section>
+
+    <div id="loading" class="loading hidden"><div class="spinner"></div></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <div id="modal" class="modal hidden"><div class="modal-card" id="modalCard" role="dialog" aria-modal="true"></div></div>
+</body>
+</html>
