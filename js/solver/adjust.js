@@ -1,10 +1,11 @@
 // Weighted least-squares adjustment of a tape-distance network (Levenberg–Marquardt).
 //
 // Unknowns: ground position P = (x, y, z) of every placed point, z vertical.
-// Observation: distance between the tape ends, held fromH / toH metres above the ground points:
-//     d = |(P_to + toH·ez) − (P_from + fromH·ez)|
+// Observations (see observations.js): distances between the tape ends, held fromH / toH metres above the
+// ground points, d = |(P_to + toH·ez) − (P_from + fromH·ez)|; horizontal offsets of a point from a line
+// (fence, wall); angles between two lines in the plan.
 // Datum: origin = (0,0,0), axis point has y = 0, side point at y > 0 (or y < 0 when flipped).
-// Only measurements with different tape heights at the two ends make z observable. To keep heights of
+// Only distances with different tape heights at the two ends make z observable. To keep heights of
 // points without such measurements bounded (and from leaking into x/y through the linearisation), every
 // measured pair (unless their height difference is measured) gets a weak terrain-smoothness pseudo-observation
 // z_to − z_from ≈ 0 with
@@ -12,10 +13,13 @@
 
 import { cholesky, cholSolve, cholInverse, ellipse2 } from './linalg.js';
 import { initialPlacement } from './initial.js';
+import { observe, kindOf, observationSigma, isValidMeasurement, pointsOfMeasurement, toDisplayUnits, normalizeAngle } from './observations.js';
 
 export const DEFAULT_SOLVER_SETTINGS = {
     sigmaConst: 0.005,
     sigmaRel: 0.002,
+    lineSigma: 0.01,      // offsets from a line: straightness of the fence / wall [m]
+    angleSigma: 1,        // angles between lines [°]
     slopeSigma0: 0.1,     // smoothness prior: constant part [m]
     slopeSigma: 0.15,     // smoothness prior: expected terrain slope (15 %)
     origin: '',
@@ -32,23 +36,45 @@ export function isActive(m) {
     return (m.status || 'active') !== 'excluded';
 }
 
-// input: { points: [{name}], measurements: [{id, from, fromH, to, toH, distance, status}], settings }
+function pairKey(a, b) {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+// Key of the reading a measurement gives; repeated readings of the same thing share it.
+function readingKey(m) {
+    const k = kindOf(m);
+    if (k === 'distance') return `d|${pairKey(m.from, m.to)}`;
+    if (k === 'offset') return `o|${m.to}|${pairKey(m.from, m.fromB)}`;
+    const l1 = pairKey(m.from, m.fromB);
+    const l2 = pairKey(m.to, m.toB);
+    return `a|${l1 < l2 ? `${l1}|${l2}` : `${l2}|${l1}`}`;
+}
+
+// Point pairs whose heights a measurement ties together (for the terrain-smoothness prior).
+function heightPairs(m) {
+    const k = kindOf(m);
+    if (k === 'distance') return [[m.from, m.to]];
+    if (k === 'offset') return [[m.from, m.to], [m.fromB, m.to]];
+    return [];
+}
+
+// input: { points: [{name, sketchX?, sketchY?}], measurements: [{id, kind, from, fromB, fromH, to, toB, toH,
+// distance, status}], settings }
 // options.exclude: Set of measurement ids to leave out in addition to excluded ones.
 export function solveNetwork(input, options = {}) {
     const settings = { ...DEFAULT_SOLVER_SETTINGS, ...(input.settings || {}) };
     const exclude = options.exclude || new Set();
     const warnings = [];
 
-    const usable = input.measurements.filter(m =>
-        isActive(m) && !exclude.has(m.id) && m.from && m.to && m.from !== m.to &&
-        Number.isFinite(m.distance) && m.distance > 0);
+    const usable = input.measurements.filter(m => isActive(m) && !exclude.has(m.id) && isValidMeasurement(m));
 
-    const init = initialPlacement(usable, settings);
+    const init = initialPlacement(usable, settings, input.points || []);
     const placed = init.placed;
     if (settings.flip) for (const p of placed.values()) p.y = -p.y;
 
-    const used = usable.filter(m => placed.has(m.from) && placed.has(m.to));
-    const is3D = used.some(m => Math.abs((m.toH || 0) - (m.fromH || 0)) > 1e-9);
+    const used = usable.filter(m => pointsOfMeasurement(m).every(n => placed.has(n)));
+    const hasDh = m => kindOf(m) === 'distance' && Math.abs((m.toH || 0) - (m.fromH || 0)) > 1e-9;
+    const is3D = used.some(hasDh);
 
     // Parameter indexing: -1 marks a coordinate fixed by the datum.
     const index = new Map();
@@ -66,10 +92,20 @@ export function solveNetwork(input, options = {}) {
     }
 
     const coord = (vec, idx, k) => (idx[k] >= 0 ? vec[idx[k]] : 0);
+    const pointAt = vec => name => {
+        const idx = index.get(name);
+        return { x: coord(vec, idx, 0), y: coord(vec, idx, 1), z: coord(vec, idx, 2) };
+    };
     const obs = used.map(m => {
-        const sigma = measurementSigma(m.distance, settings);
-        return { m, a: index.get(m.from), b: index.get(m.to), sigma, weight: 1 / (sigma * sigma) };
+        const sigma = observationSigma(m, settings);
+        return { m, kind: kindOf(m), sigma, weight: 1 / (sigma * sigma) };
     });
+    // Linearised row of an observation at vec: { res, ids, vals, unit } (unit vector: distances only).
+    const rowAt = (o, vec) => {
+        const r = observe(o.m, pointAt(vec));
+        return { res: r.residual, ids: r.partials.map(([n, k]) => index.get(n)[k]), vals: r.partials.map(p => p[2]), unit: r.unit };
+    };
+
     // Groups of points whose relative heights are measured: connected by measurements with a tape
     // height difference (union–find). Independent of the datum.
     const parent = new Map();
@@ -78,25 +114,28 @@ export function solveNetwork(input, options = {}) {
         return n;
     };
     for (const o of obs) {
-        if (Math.abs((o.m.toH || 0) - (o.m.fromH || 0)) < 1e-9) continue;
+        if (!hasDh(o.m)) continue;
         for (const n of [o.m.from, o.m.to]) if (!parent.has(n)) parent.set(n, n);
         parent.set(find(o.m.from), find(o.m.to));
     }
     const sameHeightGroup = (a, b) => parent.has(a) && parent.has(b) && find(a) === find(b);
 
-    // One smoothness pseudo-observation per distinct measured pair, unless both heights are measured.
+    // One smoothness pseudo-observation per distinct measured pair (a point and the ends of the line it
+    // was measured from count as pairs too), unless both heights are measured.
     const smooth = [];
     const seenPairs = new Set();
     for (const o of obs) {
-        const key = o.m.from < o.m.to ? `${o.m.from}|${o.m.to}` : `${o.m.to}|${o.m.from}`;
-        if (seenPairs.has(key) || sameHeightGroup(o.m.from, o.m.to)) continue;
-        seenPairs.add(key);
-        const pa = placed.get(o.m.from);
-        const pb = placed.get(o.m.to);
-        const sigma = settings.slopeSigma0 + settings.slopeSigma * Math.hypot(pb.x - pa.x, pb.y - pa.y);
-        const za = o.a[2];
-        const zb = o.b[2];
-        if (za >= 0 || zb >= 0) smooth.push({ za, zb, weight: 1 / (sigma * sigma) });
+        for (const [na, nb] of heightPairs(o.m)) {
+            const key = pairKey(na, nb);
+            if (seenPairs.has(key) || sameHeightGroup(na, nb)) continue;
+            seenPairs.add(key);
+            const pa = placed.get(na);
+            const pb = placed.get(nb);
+            const sigma = settings.slopeSigma0 + settings.slopeSigma * Math.hypot(pb.x - pa.x, pb.y - pa.y);
+            const za = index.get(na)[2];
+            const zb = index.get(nb)[2];
+            if (za >= 0 || zb >= 0) smooth.push({ za, zb, weight: 1 / (sigma * sigma) });
+        }
     }
     const zOf = (vec, i) => (i >= 0 ? vec[i] : 0);
     initialHeights();
@@ -121,8 +160,8 @@ export function solveNetwork(input, options = {}) {
         };
         for (const s of smooth) add(s.za, s.zb, 0, s.weight);
         for (const o of obs) {
+            if (!hasDh(o.m)) continue;
             const dh = (o.m.toH || 0) - (o.m.fromH || 0);
-            if (Math.abs(dh) < 1e-9) continue;
             const pa = placed.get(o.m.from);
             const pb = placed.get(o.m.to);
             const h = Math.hypot(pb.x - pa.x, pb.y - pa.y);
@@ -130,7 +169,7 @@ export function solveNetwork(input, options = {}) {
             if (vz2 <= 0) continue;
             const vz = Math.sign(dh) * Math.sqrt(vz2);
             const sigma = Math.max(o.sigma * o.m.distance / Math.abs(vz), 0.02) + 0.05 * h / Math.abs(vz);
-            add(o.a[2], o.b[2], vz - dh, 1 / (sigma * sigma));
+            add(index.get(o.m.from)[2], index.get(o.m.to)[2], vz - dh, 1 / (sigma * sigma));
         }
         const L = cholesky(N, n);
         if (!L) return;
@@ -138,50 +177,40 @@ export function solveNetwork(input, options = {}) {
         zIdx.forEach((iz, k) => { x[iz] = z[k]; });
     }
 
-    // Geometry of one observation at parameter vector vec: computed distance and unit vector from → to.
-    function geometry(o, vec) {
-        const vx = coord(vec, o.b, 0) - coord(vec, o.a, 0);
-        const vy = coord(vec, o.b, 1) - coord(vec, o.a, 1);
-        const vz = coord(vec, o.b, 2) + (o.m.toH || 0) - coord(vec, o.a, 2) - (o.m.fromH || 0);
-        const len = Math.hypot(vx, vy, vz);
-        if (len < 1e-12) return { len, ux: 1, uy: 0, uz: 0 };
-        return { len, ux: vx / len, uy: vy / len, uz: vz / len };
-    }
-
     function costOf(vec) {
         let c = 0;
+        const at = pointAt(vec);
         for (const o of obs) {
-            const r = o.m.distance - geometry(o, vec).len;
+            const r = observe(o.m, at).residual;
             c += o.weight * r * r;
         }
         for (const s of smooth) c += s.weight * (zOf(vec, s.zb) - zOf(vec, s.za)) ** 2;
         return c;
     }
 
-    // Normal equations N·δ = g. With newton = true, N also contains the second-order term −w·r·∇²d
-    // (∇²d = (I − u·uᵀ)/d for each end): heights enter ground-to-ground distances only quadratically, and
-    // without this curvature Gauss–Newton crawls along the nearly flat height directions.
+    // Normal equations N·δ = g. With newton = true, N also contains the second-order term −w·r·∇²d of the
+    // distances (∇²d = (I − u·uᵀ)/d for each end): heights enter ground-to-ground distances only
+    // quadratically, and without this curvature Gauss–Newton crawls along the nearly flat height directions.
     function normalEquations(vec, newton = false) {
         const N = new Float64Array(u * u);
         const g = new Float64Array(u);
         const diagGN = new Float64Array(u);
         for (const o of obs) {
-            const geo = geometry(o, vec);
-            const r = o.m.distance - geo.len;
-            const ids = [o.b[0], o.b[1], o.b[2], o.a[0], o.a[1], o.a[2]];
-            const vals = [geo.ux, geo.uy, geo.uz, -geo.ux, -geo.uy, -geo.uz];
-            const unit = [geo.ux, geo.uy, geo.uz];
-            const curv = newton && geo.len > 1e-9 ? (-o.weight * r) / geo.len : 0;
-            for (let p = 0; p < 6; p++) {
+            const { res: r, ids, vals, unit } = rowAt(o, vec);
+            const len = o.kind === 'distance' ? o.m.distance - r : 0;
+            const curv = newton && o.kind === 'distance' && len > 1e-9 ? (-o.weight * r) / len : 0;
+            const n = ids.length;
+            for (let p = 0; p < n; p++) {
                 const ip = ids[p];
                 if (ip < 0) continue;
                 g[ip] += o.weight * vals[p] * r;
                 diagGN[ip] += o.weight * vals[p] * vals[p];
-                for (let q = 0; q < 6; q++) {
+                for (let q = 0; q < n; q++) {
                     const iq = ids[q];
                     if (iq < 0) continue;
                     let h = o.weight * vals[p] * vals[q];
                     if (curv) {
+                        // Distance partials are ordered to (x, y, z), from (x, y, z).
                         const kp = p % 3;
                         const kq = q % 3;
                         const sign = (p < 3) === (q < 3) ? 1 : -1;
@@ -266,37 +295,42 @@ export function solveNetwork(input, options = {}) {
     const solution = { index, x, Q, u, settings, is3D, datum: { origin: init.origin, axis: init.axis, side: settings.side } };
 
     // Per-measurement statistics: residual, redundancy number and Baarda's standardized residual.
+    // Residuals, computed values and σ are reported in display units (metres, or degrees for angles).
     const measurementResults = new Map();
     let sumV2 = 0;
     let sumR = 0;
     for (const o of obs) {
-        const row = rowFor(solution, o.m.from, o.m.fromH, o.m.to, o.m.toH);
-        const v = o.m.distance - row.dist;
+        const row = rowForMeasurement(solution, o.m);
+        const v = row.residual;
         const varPred = quadForm(solution, row);
         const qvv = Math.max(o.sigma * o.sigma - varPred, 0);
         const r = qvv / (o.sigma * o.sigma);
         const w = r > 0.01 ? v / Math.sqrt(qvv) : null;
         sumV2 += o.weight * v * v;
         sumR += r;
-        measurementResults.set(o.m.id, { used: true, computed: row.dist, residual: v, sigma: o.sigma, sigmaPred: Math.sqrt(varPred), r, w });
+        const disp = val => toDisplayUnits(o.m, val);
+        measurementResults.set(o.m.id, {
+            used: true, kind: o.kind, computed: row.value, residual: disp(v), sigma: disp(o.sigma), sigmaPred: disp(Math.sqrt(varPred)), r, w
+        });
     }
     for (const m of input.measurements) {
-        if (!measurementResults.has(m.id)) measurementResults.set(m.id, { used: false });
+        if (!measurementResults.has(m.id)) measurementResults.set(m.id, { used: false, kind: kindOf(m) });
     }
 
-    // Per-point results.
-    const linkSets = new Map();
+    // Per-point results. links = distinct readings that tie the point to other placed points.
+    const readingSets = new Map();
     for (const m of usable) {
-        if (!linkSets.has(m.from)) linkSets.set(m.from, new Set());
-        if (!linkSets.has(m.to)) linkSets.set(m.to, new Set());
-        linkSets.get(m.from).add(m.to);
-        linkSets.get(m.to).add(m.from);
+        const names = pointsOfMeasurement(m);
+        for (const name of names) {
+            if (!readingSets.has(name)) readingSets.set(name, new Map());
+            readingSets.get(name).set(readingKey(m), names.filter(n => n !== name));
+        }
     }
     const pointResults = new Map();
-    const allNames = new Set([...input.points.map(p => p.name), ...linkSets.keys()]);
+    const allNames = new Set([...input.points.map(p => p.name), ...readingSets.keys()]);
     for (const name of allNames) {
-        const links = linkSets.get(name) || new Set();
-        const placedLinks = [...links].filter(n => index.has(n)).length;
+        let placedLinks = 0;
+        for (const others of (readingSets.get(name) || new Map()).values()) if (others.every(n => index.has(n))) placedLinks++;
         const idx = index.get(name);
         if (!idx) {
             pointResults.set(name, { placed: false, status: 'unplaced', links: placedLinks });
@@ -339,31 +373,36 @@ export function solveNetwork(input, options = {}) {
     };
 }
 
-// Linearised observation row for a (possibly hypothetical) measurement between two placed points.
-// Returns { dist, ids: [6], vals: [6] } or null when a point is not placed.
-export function rowFor(solution, from, fromH, to, toH) {
-    const a = solution.index.get(from);
-    const b = solution.index.get(to);
-    if (!a || !b) return null;
+// Linearised observation row of a (possibly hypothetical) measurement of any kind at the solution.
+// Returns { value (computed, display units: m, or ° in [0, 180)), residual (m or rad), ids, vals } or
+// null when a point is not placed.
+export function rowForMeasurement(solution, m) {
+    if (!pointsOfMeasurement(m).every(n => solution.index.has(n))) return null;
     const c = (idx, k) => (idx[k] >= 0 ? solution.x[idx[k]] : 0);
-    const vx = c(b, 0) - c(a, 0);
-    const vy = c(b, 1) - c(a, 1);
-    const vz = c(b, 2) + (toH || 0) - c(a, 2) - (fromH || 0);
-    const dist = Math.hypot(vx, vy, vz);
-    const ux = dist > 1e-12 ? vx / dist : 1;
-    const uy = dist > 1e-12 ? vy / dist : 0;
-    const uz = dist > 1e-12 ? vz / dist : 0;
-    return { dist, ids: [b[0], b[1], b[2], a[0], a[1], a[2]], vals: [ux, uy, uz, -ux, -uy, -uz] };
+    const r = observe(m, name => {
+        const idx = solution.index.get(name);
+        return { x: c(idx, 0), y: c(idx, 1), z: c(idx, 2) };
+    });
+    const value = kindOf(m) === 'angle' ? normalizeAngle((r.computed * 180) / Math.PI) : r.computed;
+    return { value, residual: r.residual, ids: r.partials.map(([n, k]) => solution.index.get(n)[k]), vals: r.partials.map(p => p[2]) };
+}
+
+// Linearised row of a (possibly hypothetical) distance between two placed points:
+// { dist, ids, vals } or null when a point is not placed.
+export function rowFor(solution, from, fromH, to, toH) {
+    const row = rowForMeasurement(solution, { from, fromH, to, toH, distance: 0 });
+    return row && { dist: row.value, ids: row.ids, vals: row.vals };
 }
 
 // aᵀ·Q·a for a sparse row.
 export function quadForm(solution, row) {
     const { Q, u } = solution;
     let s = 0;
-    for (let p = 0; p < 6; p++) {
+    const n = row.ids.length;
+    for (let p = 0; p < n; p++) {
         const ip = row.ids[p];
         if (ip < 0) continue;
-        for (let q = 0; q < 6; q++) {
+        for (let q = 0; q < n; q++) {
             const iq = row.ids[q];
             if (iq < 0) continue;
             s += row.vals[p] * row.vals[q] * Q[ip * u + iq];
@@ -376,7 +415,7 @@ export function quadForm(solution, row) {
 export function qTimesRow(solution, row) {
     const { Q, u } = solution;
     const out = new Float64Array(u);
-    for (let p = 0; p < 6; p++) {
+    for (let p = 0; p < row.ids.length; p++) {
         const ip = row.ids[p];
         if (ip < 0) continue;
         const v = row.vals[p];

@@ -1,6 +1,7 @@
 // Garden data model and its mapping to spreadsheet tabs.
 
 import { parseDistance } from './solver/blunders.js';
+import { kindOf, normalizeAngle } from './solver/observations.js';
 
 export const TABS = {
     points: 'Points',
@@ -10,8 +11,8 @@ export const TABS = {
 };
 
 export const HEADERS = {
-    points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status'],
-    measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note'],
+    points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status', 'sketch_x', 'sketch_y'],
+    measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note', 'kind', 'from_b', 'to_b'],
     settings: ['key', 'value'],
     blocked: ['from', 'to', 'note']
 };
@@ -23,6 +24,8 @@ export const DEFAULT_SETTINGS = {
     tapeLength: 30,
     sigmaConst: 0.005,
     sigmaRel: 0.002,
+    lineSigma: 0.01,
+    angleSigma: 1,
     heights: [0, 1, 2],
     origin: '',
     axis: '',
@@ -68,22 +71,38 @@ export function recordToRow(headers, record) {
     return headers.map(h => (record[h] === undefined || record[h] === null ? '' : record[h]));
 }
 
+const round2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : '');
+
 export function pointToRecord(p) {
-    return { name: p.name, category: p.category || '', notes: p.notes || '' };
+    return { name: p.name, category: p.category || '', notes: p.notes || '', sketch_x: round2(p.sketchX), sketch_y: round2(p.sketchY) };
 }
 
+// Sheet record of a measurement. Distances keep the original columns only (kind, from_b, to_b stay
+// empty), so sheets made before offsets and angles existed read them unchanged.
 export function measurementToRecord(m) {
+    const kind = kindOf(m);
+    const dist = kind === 'distance';
     return {
         id: m.id,
         timestamp: m.timestamp || '',
         from: m.from,
-        from_h: m.fromH || 0,
+        from_h: dist ? m.fromH || 0 : '',
         to: m.to,
-        to_h: m.toH || 0,
+        to_h: dist ? m.toH || 0 : '',
         distance: m.distance,
         status: m.status || 'active',
-        note: m.note || ''
+        note: m.note || '',
+        kind: dist ? '' : kind,
+        from_b: dist ? '' : m.fromB,
+        to_b: kind === 'angle' ? m.toB : ''
     };
+}
+
+// Signed number with a decimal point or comma (angles may be typed as −37).
+function signedNum(value) {
+    if (typeof value === 'number') return value;
+    const s = String(value ?? '').trim().replace(',', '.');
+    return /^[-+]?(\d*\.?\d+|\d+\.)$/.test(s) ? parseFloat(s) : NaN;
 }
 
 function parseSettings(rows) {
@@ -125,7 +144,11 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
             continue;
         }
         seen.add(name);
-        garden.points.push({ name, category: String(record.category ?? '').trim(), notes: String(record.notes ?? '') });
+        const point = { name, category: String(record.category ?? '').trim(), notes: String(record.notes ?? '') };
+        const sx = signedNum(record.sketch_x);
+        const sy = signedNum(record.sketch_y);
+        if (Number.isFinite(sx) && Number.isFinite(sy)) Object.assign(point, { sketchX: sx, sketchY: sy });
+        garden.points.push(point);
     }
 
     const ms = tableToRecords(measurements);
@@ -133,17 +156,26 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
     for (const { record, rowNumber } of ms.rows) {
         const from = String(record.from ?? '').trim();
         const to = String(record.to ?? '').trim();
+        const fromB = String(record.from_b ?? '').trim();
+        const toB = String(record.to_b ?? '').trim();
+        const kindText = String(record.kind ?? '').trim().toLowerCase();
+        const kind = kindText === '' || kindText === 'distance' ? 'distance' : kindText;
         const raw = record.distance;
-        const distance = num(raw, NaN);
+        let distance = kind === 'angle' ? signedNum(raw) : num(raw, NaN);
+        if (kind === 'angle') distance = normalizeAngle(distance);
         let id = String(record.id ?? '').trim();
         const needsId = !id || ids.has(id);
         if (needsId) id = `row-${rowNumber}`;
         ids.add(id);
-        if (!from || !to || !Number.isFinite(distance) || distance <= 0) {
+        const valid = kind === 'distance' ? from && to && distance > 0
+            : kind === 'offset' ? from && fromB && to && distance >= 0
+                : kind === 'angle' ? from && fromB && to && toB && Number.isFinite(distance)
+                    : false;
+        if (!valid || !Number.isFinite(distance)) {
             warnings.push({ key: 'warnBadMeasurement', params: { row: rowNumber } });
             continue;
         }
-        for (const name of [from, to]) {
+        for (const name of [from, to, fromB, toB].filter(Boolean)) {
             if (!seen.has(name)) {
                 seen.add(name);
                 garden.points.push({ name, category: '', notes: '' });
@@ -151,19 +183,22 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
             }
         }
         const status = String(record.status ?? '').trim().toLowerCase() === 'excluded' ? 'excluded' : 'active';
-        garden.measurements.push({
+        const m = {
             id,
             needsId,
             timestamp: String(record.timestamp ?? ''),
             from,
-            fromH: num(record.from_h, 0),
+            fromH: kind === 'distance' ? num(record.from_h, 0) : 0,
             to,
-            toH: num(record.to_h, 0),
+            toH: kind === 'distance' ? num(record.to_h, 0) : 0,
             distance,
-            raw: typeof raw === 'string' ? raw : undefined,
+            raw: typeof raw === 'string' && kind !== 'angle' ? raw : undefined,
             status,
             note: String(record.note ?? '')
-        });
+        };
+        if (kind !== 'distance') Object.assign(m, { kind, fromB });
+        if (kind === 'angle') m.toB = toB;
+        garden.measurements.push(m);
     }
 
     garden.settings = parseSettings(tableToRecords(settings).rows);
@@ -187,6 +222,8 @@ export function solverInput(garden) {
         settings: {
             sigmaConst: s.sigmaConst,
             sigmaRel: s.sigmaRel,
+            lineSigma: s.lineSigma,
+            angleSigma: s.angleSigma,
             origin: s.origin,
             axis: s.axis,
             side: s.side,

@@ -6,7 +6,8 @@
 // Plan (x, y) and height (z) reductions are scored separately, each relative to its own total variance,
 // because heights are usually far less certain than plan positions and would otherwise dominate.
 
-import { rowFor, quadForm, qTimesRow, measurementSigma } from './adjust.js';
+import { rowFor, rowForMeasurement, quadForm, qTimesRow, measurementSigma } from './adjust.js';
+import { kindOf, observationSigma } from './observations.js';
 
 export function pairKey(a, b) {
     return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -36,6 +37,63 @@ export function traces(solution) {
     return { xy, z };
 }
 
+// Variance reductions of one hypothetical observation (row, σ): { xyPct, zPct, score }.
+function gainOf(solution, row, sigma, group, total, zWeight) {
+    const denom = sigma * sigma + quadForm(solution, row);
+    const qa = qTimesRow(solution, row);
+    let numXY = 0;
+    let numZ = 0;
+    for (let k = 0; k < qa.length; k++) {
+        if (group[k] === 1) numXY += qa[k] * qa[k];
+        else numZ += qa[k] * qa[k];
+    }
+    const xyPct = total.xy > 0 ? (100 * numXY) / denom / total.xy : 0;
+    const zPct = total.z > 0 ? (100 * numZ) / denom / total.z : 0;
+    return { xyPct, zPct, score: xyPct + zWeight * zPct };
+}
+
+// Lines (point pairs) the garden already uses as references for offsets or angles: [[a, b]].
+export function referenceLines(measurements) {
+    const out = new Map();
+    const add = (a, b) => {
+        if (a && b && a !== b) out.set(pairKey(a, b), a < b ? [a, b] : [b, a]);
+    };
+    for (const m of measurements) {
+        if (m.status === 'excluded') continue;
+        const k = kindOf(m);
+        if (k === 'offset') add(m.from, m.fromB);
+        else if (k === 'angle') {
+            add(m.from, m.fromB);
+            add(m.to, m.toB);
+        }
+    }
+    return [...out.values()];
+}
+
+// Suggested offsets of points from the given lines: [{ kind: 'offset', from, fromB, to, estimate, xyPct,
+// zPct, score }] best first. options: { lines: [[a, b]], tapeLength, point (only offsets of this point),
+// line ([a, b]: only offsets from this line), use3D, maxResults }.
+export function suggestOffsets(solution, options = {}) {
+    const { lines = [], tapeLength = 30, point = null, line = null, use3D = solution.is3D, maxResults = 10 } = options;
+    const group = parameterGroups(solution);
+    const total = traces(solution);
+    const zWeight = use3D ? 0.5 : 0;
+    const out = [];
+    const candidatesLines = line ? [line] : lines;
+    for (const [a, b] of candidatesLines) {
+        for (const p of solution.index.keys()) {
+            if (p === a || p === b || (point && p !== point)) continue;
+            const m = { kind: 'offset', from: a, fromB: b, to: p, distance: 1 };
+            const row = rowForMeasurement(solution, m);
+            if (!row || row.value > tapeLength) continue;
+            const gain = gainOf(solution, row, observationSigma({ ...m, distance: row.value }, solution.settings), group, total, zWeight);
+            out.push({ kind: 'offset', from: a, fromB: b, to: p, estimate: row.value, ...gain });
+        }
+    }
+    out.sort((p, q) => q.score - p.score);
+    return out.slice(0, maxResults);
+}
+
 // options: { tapeLength, blocked: Set(pairKey), use3D, heights: [..], station, maxResults }
 // Returns [{ from, fromH, to, toH, estimate, xyPct, zPct, score }] best first; xyPct / zPct are the
 // percentages by which the total plan / height variance would shrink.
@@ -63,19 +121,8 @@ export function suggestMeasurements(solution, options = {}) {
                 const toH = from === a ? hb : ha;
                 const row = rowFor(solution, from, fromH, to, toH);
                 if (!row || row.dist > tapeLength) continue;
-                const sigma = measurementSigma(row.dist, solution.settings);
-                const denom = sigma * sigma + quadForm(solution, row);
-                const qa = qTimesRow(solution, row);
-                let numXY = 0;
-                let numZ = 0;
-                for (let k = 0; k < qa.length; k++) {
-                    if (group[k] === 1) numXY += qa[k] * qa[k];
-                    else numZ += qa[k] * qa[k];
-                }
-                const xyPct = total.xy > 0 ? (100 * numXY) / denom / total.xy : 0;
-                const zPct = total.z > 0 ? (100 * numZ) / denom / total.z : 0;
-                const score = xyPct + zWeight * zPct;
-                if (!best || score > best.score) best = { from, fromH, to, toH, estimate: row.dist, xyPct, zPct, score };
+                const gain = gainOf(solution, row, measurementSigma(row.dist, solution.settings), group, total, zWeight);
+                if (!best || gain.score > best.score) best = { kind: 'distance', from, fromH, to, toH, estimate: row.dist, ...gain };
             }
             if (best) out.push(best);
         }

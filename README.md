@@ -15,8 +15,20 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   become measurable.
 - **Measuring assistant:** "I'm at point S" lists the reachable points with estimated distances and the value of
   measuring each one. New points can be named on the spot.
+- **Lines and angles:** every measured pair is also a line (a fence, a wall, a side of the house). Measure
+  *from a line* the same way as from a point:
+  - line → point: the shortest distance of the point from the line; **0 means the point lies on the line**
+    (fence posts in a row);
+  - line → line: the angle between them, e.g. **⟂ 90°** for a square corner or **∥ 0°** for parallel edges.
+  A rectangle needs 3 sides and 2 square corners; the 4th side and the other corners are then checks.
+- **Sketch on the plan:** tap **⊕** and then the plan to place a new point roughly where it is. Two readings of
+  any kind fix a point up to a mirror image (which side of the fence, which way along it); the sketch picks the
+  one you mean. If a point lands on the wrong side, drag it with **✥** close to where it really is: it jumps to
+  the other solution if the readings allow one, and springs back if it is already fixed. The sketch is never
+  used as a measurement, so it does not bias the result.
 - **Hints:** a ranked list of the measurements that would shrink the plan / height uncertainty most, plus points
-  that still need links. The hints are also drawn on the plan.
+  that still need readings. Distances from lines already in use are suggested too. The hints are also drawn on
+  the plan.
 - **Typo detection:**
   - Each distance is checked against the expected value as you type it. If it doesn't fit, you get "Did you
     mean 12.45 (swapped digits)?"
@@ -79,10 +91,18 @@ added. Columns are found by their header name (case-insensitive), so you can reo
 
 | Tab | Columns | Notes |
 |---|---|---|
-| `Points` | `name`, `category`, `notes`, `x`, `y`, `z`, `sigma_xy`, `sigma_z`, `links`, `status` | `x` … `status` are filled by **Write coordinates to sheet**. |
-| `Measurements` | `id`, `timestamp`, `from`, `from_h`, `to`, `to_h`, `distance`, `status`, `residual`, `w`, `flag`, `note` | `from_h` / `to_h`: height of the tape above the ground in metres (default 0). Set `status` to `excluded` to ignore a row. |
+| `Points` | `name`, `category`, `notes`, `x`, `y`, `z`, `sigma_xy`, `sigma_z`, `links`, `status`, `sketch_x`, `sketch_y` | `x` … `status` are filled by **Write coordinates to sheet**. `sketch_x` / `sketch_y`: the rough position tapped on the plan (only used to choose between mirror solutions). |
+| `Measurements` | `id`, `timestamp`, `from`, `from_h`, `to`, `to_h`, `distance`, `status`, `residual`, `w`, `flag`, `note`, `kind`, `from_b`, `to_b` | `from_h` / `to_h`: height of the tape above the ground in metres (default 0). Set `status` to `excluded` to ignore a row. `kind` is empty for a distance; see below for `offset` and `angle`. |
 | `Settings` | `key`, `value` | Garden name, tape length, accuracy, datum points… |
 | `Blocked` | `from`, `to`, `note` | Pairs that can't be measured (obstructed); they are not suggested. |
+
+Lines are written as two points, `from`–`from_b` and `to`–`to_b`; their order does not matter.
+
+| `kind` | Columns | `distance` holds |
+|---|---|---|
+| (empty) | `from`, `from_h`, `to`, `to_h` | the tape distance in metres |
+| `offset` | line `from`–`from_b`, point `to` | the horizontal distance of the point from the line in metres (0 = on the line) |
+| `angle` | line `from`–`from_b`, line `to`–`to_b` | the angle in degrees by which the first line turns counter-clockwise (seen from above) onto the second, 0 ≤ angle < 180 (180 is stored as 0, −37 as 143) |
 
 Rows typed into the sheet by hand work too; decimal commas (`12,45`) are accepted. Points that are used in
 measurements but missing from `Points` are created automatically.
@@ -93,7 +113,13 @@ measurements but missing from `Points` are created automatically.
   - Each point has a ground position P = (x, y, z), with z vertical.
   - A measurement from point *a* (tape at height hₐ) to point *b* (tape at h_b) observes
     d = |(P_b + h_b·ez) − (P_a + hₐ·ez)|.
-  - Weights come from σ = 5 mm + 2 mm/m (both editable).
+  - A distance from a line a–b observes the horizontal distance of P from the vertical plane through a and b
+    (a fence or wall is vertical, so tape heights don't matter): |cross(P_b − P_a, P − P_a)| / |P_b − P_a| in
+    the plan. 0 is compared with the signed value, so "on the line" is an ordinary smooth observation.
+  - An angle observes θ = atan2(cross(u, v), u·v) of the plan directions u = b − a and v = d − c, compared
+    modulo 180°, so the direction of either line drops out.
+  - Weights come from σ = 5 mm + 2 mm/m for distances (both editable), plus 1 cm for the straightness of a
+    fence or wall for distances from a line, and 1° for angles (both editable).
 - **Datum.** The origin point is (0, 0, 0), the axis point lies on +x, and the side point is on the +y side.
   All three can be chosen in Settings and don't need to be measured to each other.
 - **Heights.**
@@ -102,9 +128,14 @@ measurements but missing from `Points` are created automatically.
     (σ = 0.1 m + 15 % of the distance). Their heights are shown as `~` (interpolated).
   - The prior is not used between points whose height difference is measured, so it doesn't bias them.
 - **Start values.**
-  - Incremental trilateration from the best-braced link.
-  - A point placed from only two neighbours has two mirror-image solutions. The app searches over these
-    choices so that no branch of the network ends up folded.
+  - Incremental placement from the best-braced link. Each reading to placed points is a locus on the plan: a
+    circle (distance), two parallel lines (distance from a line; one line for 0) or a line through a neighbour
+    at the measured angle. A point goes to the best intersection of its loci.
+  - A point placed from only two readings has two (or four) equally good solutions. If the point has a sketched
+    position and two placed points have one too, the sketch (fitted to the placed points by a similarity
+    transform) picks the nearest solution. Otherwise the app searches over the choices so that no branch of
+    the network ends up folded.
+  - Without a side point, the drawing is mirrored to match the sketch once three placed points have one.
   - Heights are then initialised from the height-offset measurements.
 - **Adjustment.**
   - Levenberg–Marquardt with the full Newton curvature of the distance function. Without it, convergence
@@ -119,14 +150,15 @@ measurements but missing from `Points` are created automatically.
   - After each adjustment, standardized residuals w = v / σᵥ are tested, and the worst measurement is removed
     iteratively. The critical value is 3.29, raised by a Bonferroni correction for large networks.
   - Candidate corrections cover swapped digits, a misplaced decimal point, 6↔9, ±1 m, ±10 cm, and an extra,
-    missing or wrong digit.
+    missing or wrong digit. For an angle the only correction offered is the mirror value 180° − θ.
 
 ## Project layout
 
 ```
 index.html, style.css      UI shell
 js/app.js                  controller: screens, actions, recomputation
-js/solver/                 linalg, initial placement, adjustment, planner (hints), blunders (typos)
+js/solver/                 observations (measurement kinds), linalg, initial placement, adjustment,
+                           planner (hints), blunders (typos)
 js/store.js                Local and Google Sheets stores (offline queue, write-back)
 js/sheets-api.js           Sheets REST wrapper (fetchWithRetry ported from plant-trainer)
 js/google-auth.js, picker.js  Google Identity Services token client, Drive Picker

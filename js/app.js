@@ -6,7 +6,10 @@ import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
 import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
-import { suggestMeasurements, underdeterminedPoints, pairKey } from './solver/planner.js';
+import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
+import { sketchFrame, sketchOf } from './solver/initial.js';
+import { kindOf } from './solver/observations.js';
+import { lineKey, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
 import { HintsPanel } from './view/hints-panel.js';
@@ -14,10 +17,8 @@ import { PointsPanel, MeasurementsPanel, SettingsPanel } from './view/data-panel
 import { downloadSvg, downloadPdf, downloadPointsCsv, downloadGardenJson } from './export.js';
 import { demoGarden } from './demo.js';
 import { escapeHtml, fmt, uid, nowStamp, storage } from './util.js';
-import { formatDistance } from './units.js';
 
 const unit = () => (state.garden?.settings.entryUnit === 'm' ? 'm' : 'cm');
-const dist = metres => formatDistance(metres, unit());
 
 const $ = sel => document.querySelector(sel);
 
@@ -30,8 +31,11 @@ const state = {
     result: null,
     hints: [],
     under: [],
+    positions: new Map(), // name → { x, y, placed }: computed, or else sketched (mapped into the plan frame)
+    frame: null, // similarity: sketch frame → plan frame
     ui: {
         tab: 'measure',
+        tool: 'pan',
         station: '',
         stationH: 0,
         target: '',
@@ -100,8 +104,21 @@ function recompute() {
     const solution = s.autoExclude ? res.solution : res.initial;
     const blocked = new Set(garden.blocked.map(b => pairKey(b.a, b.b)));
     state.result = { solution, suspects: res.suspects };
-    state.hints = solution.u ? suggestMeasurements(solution, { tapeLength: s.tapeLength, blocked, use3D: s.mode3d, heights: s.heights, maxResults: 8 }) : [];
+    state.hints = solution.u
+        ? [
+            ...suggestMeasurements(solution, { tapeLength: s.tapeLength, blocked, use3D: s.mode3d, heights: s.heights, maxResults: 8 }),
+            ...suggestOffsets(solution, { lines: referenceLines(garden.measurements), tapeLength: s.tapeLength, use3D: s.mode3d, maxResults: 8 })
+        ].sort((a, b) => b.score - a.score).slice(0, 8)
+        : [];
     state.under = underdeterminedPoints(solution);
+    state.frame = sketchFrame(solution, garden.points);
+    state.positions = new Map();
+    for (const p of garden.points) {
+        const r = solution.points.get(p.name);
+        const sketch = sketchOf(p);
+        if (r?.placed) state.positions.set(p.name, { x: r.x, y: r.y, placed: true });
+        else if (sketch) state.positions.set(p.name, { ...state.frame.apply(sketch), placed: false });
+    }
 }
 
 // ---- Rendering ----------------------------------------------------------------------------------
@@ -112,9 +129,11 @@ const panels = {};
 function renderPlan() {
     if (!state.result) return;
     const layers = state.ui.layers;
+    const sketchPos = new Map([...state.positions].filter(([, p]) => !p.placed));
     planView.setScene({
         solution: state.result.solution,
         garden: state.garden,
+        sketchPos,
         suspects: new Set(state.result.suspects.map(s => s.id)),
         hints: layers.hints ? state.hints : [],
         selected: state.ui.selected,
@@ -122,8 +141,7 @@ function renderPlan() {
         target: state.ui.target,
         options: layers
     });
-    const anyPlaced = [...state.result.solution.points.values()].some(p => p.placed);
-    $('#planEmpty').classList.toggle('hidden', anyPlaced);
+    $('#planEmpty').classList.toggle('hidden', state.positions.size > 0);
 }
 
 function renderSync(sync) {
@@ -225,7 +243,8 @@ function showGardenScreen() {
 
 // ---- Actions ------------------------------------------------------------------------------------
 
-function newPointDialog(initialName, onCreated) {
+// sketch: { x, y } in the sketch frame (from a tap on the plan), or null.
+function newPointDialog(initialName, onCreated, sketch = null) {
     let category = 'other';
     const card = openModal(`
         <h3>${escapeHtml(t('newPoint'))}</h3>
@@ -252,7 +271,9 @@ function newPointDialog(initialName, onCreated) {
                 err.classList.remove('hidden');
                 return;
             }
-            state.store.addPoint({ name, category, notes: card.querySelector('#pointNotesInput').value.trim() });
+            const point = { name, category, notes: card.querySelector('#pointNotesInput').value.trim() };
+            if (sketch) Object.assign(point, { sketchX: Math.round(sketch.x * 100) / 100, sketchY: Math.round(sketch.y * 100) / 100 });
+            state.store.addPoint(point);
             closeModal();
             refresh();
             onCreated?.(name);
@@ -270,7 +291,7 @@ function commitMeasurement(m, check, done) {
     state.store.addMeasurement(measurement);
     recompute();
     renderAll();
-    const msg = t('saved', { from: m.from, to: m.to, d: dist(m.distance) });
+    const msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
     toast(check?.status === 'ok' ? `${msg} ✓ ${t('matchesExpected')}` : msg, 'ok');
     done?.();
 }
@@ -282,19 +303,23 @@ function submitMeasurement(m, done) {
         commitMeasurement(m, check, done);
         return;
     }
+    const angle = kindOf(m) === 'angle';
+    const val = v => formatValue({ ...m, distance: v }, unit());
     openModal(`
-        <h3>${escapeHtml(t('checkTitle'))}</h3>
-        <p>${escapeHtml(t('checkText', { d: dist(m.distance), expected: dist(check.predicted), dev: fmt(check.deviation * 100, 1), tol: fmt(check.tol * 100, 1) }))}</p>
+        <h3>${escapeHtml(t(angle ? 'checkTitleAngle' : 'checkTitle'))}</h3>
+        <p>${escapeHtml(angle
+            ? t('checkTextAngle', { d: val(m.distance), expected: formatExpected(m, check.predicted, unit()), dev: fmt(check.deviation, 1), tol: fmt(check.tol, 1) })
+            : t('checkText', { d: val(m.distance), expected: formatExpected(m, check.predicted, unit()), dev: fmt(check.deviation * 100, 1), tol: fmt(check.tol * 100, 1) }))}</p>
         ${check.suggestions.length ? `<p>${escapeHtml(t('didYouMean'))}</p>` : ''}
         <div class="column">
-            ${check.suggestions.map(c => `<button type="button" class="primary" data-action="use" data-value="${c.value}">${escapeHtml(t('useValue', { value: dist(c.value), kind: t(`kind_${c.kind}`) }))}</button>`).join('')}
-            <button type="button" data-action="keep">${escapeHtml(t('keepValue', { value: dist(m.distance) }))}</button>
+            ${check.suggestions.map(c => `<button type="button" class="primary" data-action="use" data-value="${c.value}">${escapeHtml(t('useValue', { value: val(c.value), kind: t(`kind_${c.kind}`) }))}</button>`).join('')}
+            <button type="button" data-action="keep">${escapeHtml(t('keepValue', { value: val(m.distance) }))}</button>
             <button type="button" class="ghost" data-action="close">${escapeHtml(t('cancelRemeasure'))}</button>
         </div>`, {
         use: btn => {
             closeModal();
             const value = Number(btn.dataset.value);
-            commitMeasurement({ ...m, distance: value, raw: undefined, typed: undefined, note: [m.note, t('correctedFrom', { value: m.typed || dist(m.distance) })].filter(Boolean).join(' ') }, { status: 'ok' }, done);
+            commitMeasurement({ ...m, distance: value, raw: undefined, typed: undefined, note: [m.note, t('correctedFrom', { value: m.typed || val(m.distance) })].filter(Boolean).join(' ') }, { status: 'ok' }, done);
         },
         keep: () => {
             closeModal();
@@ -318,9 +343,9 @@ const actions = {
     applyCorrection(id, value, kind) {
         const m = state.garden.measurements.find(x => x.id === id);
         if (!m) return;
-        const note = [m.note, t('correctedFrom', { value: dist(m.distance) })].filter(Boolean).join(' ');
+        const note = [m.note, t('correctedFrom', { value: formatValue(m, unit()) })].filter(Boolean).join(' ');
         state.store.updateMeasurement(id, { distance: value, note, raw: undefined, status: 'active' });
-        toast(t('corrected', { value: dist(value), kind: t(`kind_${kind}`) }), 'ok');
+        toast(t('corrected', { value: formatValue({ ...m, distance: value }, unit()), kind: t(`kind_${kind}`) }), 'ok');
         refresh();
     },
 
@@ -335,6 +360,46 @@ const actions = {
         state.ui.tab = 'measure';
         panels.measure.prefill(h);
         renderAll();
+    },
+
+    // Saves a new sketch position for a point dragged on the plan (x, y in the plan frame), then says
+    // whether the computed point followed (jumped to its mirror position) or is fixed by the readings.
+    movePoint(name, x, y) {
+        const before = state.positions.get(name);
+        const s = state.frame.invert({ x, y });
+        state.store.updatePoint(name, { sketchX: Math.round(s.x * 100) / 100, sketchY: Math.round(s.y * 100) / 100 });
+        refresh();
+        const after = state.positions.get(name);
+        if (before?.placed && after?.placed) {
+            const shift = Math.hypot(after.x - before.x, after.y - before.y);
+            if (shift > 0.05) toast(t('pointMoved', { name }), 'ok');
+            else if (Math.hypot(x - before.x, y - before.y) > 0.3) toast(t('pointFixed', { name }), 'info');
+        }
+    },
+
+    // A point or a measured line tapped on the plan: picks "from" / "to" while measuring.
+    select(sel) {
+        if (sel.line) {
+            state.ui.tab = 'measure';
+            panels.measure.select(lineKey(...sel.line));
+            renderPlan();
+            renderTabs();
+            return;
+        }
+        if (state.ui.tab === 'measure') {
+            panels.measure.select(sel.point);
+            renderPlan();
+            return;
+        }
+        actions.selectPoint(sel.point);
+    },
+
+    setTool(tool) {
+        state.ui.tool = state.ui.tool === tool ? 'pan' : tool;
+        planView.setMode(state.ui.tool);
+        $('#addPointButton').classList.toggle('active', state.ui.tool === 'add');
+        $('#moveButton').classList.toggle('active', state.ui.tool === 'move');
+        if (state.ui.tool !== 'pan') toast(t(state.ui.tool === 'add' ? 'toolAddHelp' : 'toolMoveHelp'), 'info');
     },
 
     selectPoint(name) {
@@ -517,21 +582,11 @@ function bindStartAndGardenScreens() {
 }
 
 function bindMainScreen() {
-    planView = new PlanView($('#plan'), { onPointClick: name => {
-        if (state.ui.tab === 'measure' && state.ui.station && name !== state.ui.station) {
-            state.ui.target = name;
-            panels.measure.render();
-            renderPlan();
-            return;
-        }
-        if (state.ui.tab === 'measure' && !state.ui.station) {
-            state.ui.station = name;
-            panels.measure.render();
-            renderPlan();
-            return;
-        }
-        actions.selectPoint(name);
-    } });
+    planView = new PlanView($('#plan'), {
+        onSelect: sel => actions.select(sel),
+        onAdd: (x, y) => newPointDialog('', null, state.frame.invert({ x, y })),
+        onMove: (name, x, y) => actions.movePoint(name, x, y)
+    });
     panels.measure = new MeasurePanel($('#tab-measure'), app);
     panels.hints = new HintsPanel($('#tab-hints'), app);
     panels.points = new PointsPanel($('#tab-points'), app);
@@ -546,6 +601,8 @@ function bindMainScreen() {
         renderTabs();
     });
     $('#fitButton').addEventListener('click', () => planView.fit());
+    $('#addPointButton').addEventListener('click', () => actions.setTool('add'));
+    $('#moveButton').addEventListener('click', () => actions.setTool('move'));
     $('#zoomInButton').addEventListener('click', () => planView.zoomBy(1.4));
     $('#zoomOutButton').addEventListener('click', () => planView.zoomBy(1 / 1.4));
     $('#layersButton').addEventListener('click', () => {

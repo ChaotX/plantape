@@ -437,6 +437,26 @@ body.google-on .local-only {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
 }
 
+.plan-tools button.tool.active {
+    background: #1565c0;
+    border-color: #1565c0;
+    color: #fff;
+}
+
+#plan[data-mode="add"] {
+    cursor: crosshair;
+}
+
+#plan[data-mode="move"] [data-point] {
+    cursor: move !important;
+}
+
+.dot.line-dot {
+    border-radius: 0;
+    height: 3px;
+    background: #8d6e63;
+}
+
 .layers {
     position: absolute;
     top: 10px;

@@ -3,6 +3,7 @@
 import { t } from '../i18n.js';
 import { escapeHtml, fmt } from '../util.js';
 import { formatDistance } from '../units.js';
+import { describeMeasurement, formatValue, formatExpected, lineLabel } from './describe.js';
 
 // "+12 % plan · +30 % height" — the shares by which total plan / height uncertainty would shrink.
 export function gainLabel(h, use3D) {
@@ -50,10 +51,10 @@ export class HintsPanel {
                 const m = byId.get(s.id);
                 if (!m) return '';
                 return `<li class="card-inset suspect">
-                    <div><strong>${escapeHtml(m.from)}</strong> (${fmt(m.fromH, 1)}) → <strong>${escapeHtml(m.to)}</strong> (${fmt(m.toH, 1)}): <strong>${formatDistance(m.distance, unit)}</strong></div>
-                    <div class="muted">${escapeHtml(t('suspectDetail', { w: fmt(Math.abs(s.w), 1), expected: s.predicted === null ? '?' : formatDistance(s.predicted, unit) }))}</div>
+                    <div><strong>${escapeHtml(describeMeasurement(m))}</strong>: <strong>${escapeHtml(formatValue(m, unit))}</strong></div>
+                    <div class="muted">${escapeHtml(t('suspectDetail', { w: fmt(Math.abs(s.w), 1), expected: s.predicted === null ? '?' : formatExpected(m, s.predicted, unit) }))}</div>
                     <div class="row wrap">
-                        ${s.suggestions.map(c => `<button type="button" class="primary small" data-action="fix" data-id="${escapeHtml(m.id)}" data-value="${c.value}" data-kind="${c.kind}">${escapeHtml(t('useValue', { value: formatDistance(c.value, unit), kind: t(`kind_${c.kind}`) }))}</button>`).join('')}
+                        ${s.suggestions.map(c => `<button type="button" class="primary small" data-action="fix" data-id="${escapeHtml(m.id)}" data-value="${c.value}" data-kind="${c.kind}">${escapeHtml(t('useValue', { value: formatValue({ ...m, distance: c.value }, unit), kind: t(`kind_${c.kind}`) }))}</button>`).join('')}
                         <button type="button" class="small" data-action="exclude" data-id="${escapeHtml(m.id)}">${escapeHtml(t('exclude'))}</button>
                         <button type="button" class="small" data-action="remeasure" data-id="${escapeHtml(m.id)}">${escapeHtml(t('remeasure'))}</button>
                     </div></li>`;
@@ -68,7 +69,9 @@ export class HintsPanel {
             <ol class="hint-list">${hints.map((h, i) => `
                 <li><button type="button" class="hint" data-action="hint" data-index="${i}">
                     <span class="rank">${i + 1}</span>
-                    <span class="name">${escapeHtml(h.from)} <small>${fmt(h.fromH, 1)} m</small> ↔ ${escapeHtml(h.to)} <small>${fmt(h.toH, 1)} m</small></span>
+                    <span class="name">${h.kind === 'offset'
+                        ? `${escapeHtml(lineLabel(h.from, h.fromB))} ⊥ ${escapeHtml(h.to)}`
+                        : `${escapeHtml(h.from)} <small>${fmt(h.fromH, 1)} m</small> ↔ ${escapeHtml(h.to)} <small>${fmt(h.toH, 1)} m</small>`}</span>
                     <span class="meta">≈ ${formatDistance(h.estimate, garden.settings.entryUnit === 'm' ? 'm' : 'cm')}<br>${escapeHtml(gainLabel(h, garden.settings.mode3d))}</span>
                 </button></li>`).join('')}</ol>
             <p class="muted small">${escapeHtml(t('gainHelp'))}</p>` : placed >= 2 ? `<p class="muted">${escapeHtml(t('noHints'))}</p>` : '';
@@ -95,7 +98,7 @@ export class HintsPanel {
         else if (action === 'exclude') actions.toggleMeasurement(btn.dataset.id, 'excluded');
         else if (action === 'remeasure') {
             const m = state.garden.measurements.find(x => x.id === btn.dataset.id);
-            if (m) actions.useHint({ from: m.from, fromH: m.fromH, to: m.to, toH: m.toH });
+            if (m) actions.useHint(m);
         }
     }
 }

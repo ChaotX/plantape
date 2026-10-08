@@ -1,4 +1,6 @@
 // A synthetic sloped demo garden with realistic tape noise and one typo, for trying the app out.
+// Besides tape distances it has a fence with a post on its line, trees measured from the fence, and a
+// house corner squared with angles; every point has a rough sketched position.
 
 import { emptyGarden } from './model.js';
 
@@ -14,8 +16,13 @@ const TRUTH = [
     ['Walnut', 'tree', 12.5, -17, 1.3],
     ['Shed', 'building', 16, -4, 0.6],
     ['Pond', 'water', 7, -21, 1.1],
-    ['Rose', 'shrub', 13.5, -10.5, 0.8]
+    ['Rose', 'shrub', 13.5, -10.5, 0.8],
+    // Measured with lines and angles only (not in the all-pairs distances below).
+    ['House SW', 'building', 0, -7.2, 0.05],
+    ['Fence W3', 'fence', -5.25, -11, 0.5],
+    ['Plum', 'tree', -2.2, -9.5, 0.4]
 ];
+const LINE_ONLY = new Set(['House SW', 'Fence W3', 'Plum']);
 
 function rng(seed) {
     let a = seed >>> 0;
@@ -35,31 +42,60 @@ export function demoGarden(name) {
     garden.settings.side = 'Gate';
     const rand = rng(7);
     const gauss = () => Math.sqrt(-2 * Math.log(Math.max(rand(), 1e-12))) * Math.cos(2 * Math.PI * rand());
-    garden.points = TRUTH.map(([n, category]) => ({ name: n, category, notes: '' }));
+    // Sketches: the true plan, drawn by hand (up to about half a metre off).
+    garden.points = TRUTH.map(([n, category, x, y]) => ({
+        name: n, category, notes: '',
+        sketchX: Math.round((x + 0.3 * gauss()) * 10) / 10,
+        sketchY: Math.round((y + 0.3 * gauss()) * 10) / 10
+    }));
+    const at = new Map(TRUTH.map(([n, , x, y, z]) => [n, { x, y, z }]));
     let id = 0;
     const day = new Date().toISOString().slice(0, 10);
+    const add = m => garden.measurements.push({
+        id: `demo-${++id}`,
+        timestamp: `${day} 10:${String(id % 60).padStart(2, '0')}:00`,
+        status: 'active',
+        note: '',
+        ...m
+    });
+    const distance = (a, b, fh = 0, th = 0) => {
+        const A = at.get(a);
+        const B = at.get(b);
+        const d = Math.hypot(B.x - A.x, B.y - A.y, B.z + th - A.z - fh);
+        const sigma = 0.005 + 0.002 * d;
+        add({ from: a, fromH: fh, to: b, toH: th, distance: Math.round((d + sigma * gauss()) * 1000) / 1000 });
+    };
     for (let i = 0; i < TRUTH.length; i++) {
         for (let j = i + 1; j < TRUTH.length; j++) {
-            const [a, , ax, ay, az] = TRUTH[i];
-            const [b, , bx, by, bz] = TRUTH[j];
+            const [a, , ax, ay] = TRUTH[i];
+            const [b, , bx, by] = TRUTH[j];
+            if (LINE_ONLY.has(a) || LINE_ONLY.has(b)) continue;
             const horiz = Math.hypot(bx - ax, by - ay);
             if (horiz > 14 || rand() < 0.12) continue;
-            const pairs = [[0, 0]];
-            if (rand() < 0.4) pairs.push([0, 2]);
-            for (const [fh, th] of pairs) {
-                const d = Math.hypot(horiz, bz + th - az - fh);
-                const sigma = 0.005 + 0.002 * d;
-                garden.measurements.push({
-                    id: `demo-${++id}`,
-                    timestamp: `${day} 10:${String(id % 60).padStart(2, '0')}:00`,
-                    from: a, fromH: fh, to: b, toH: th,
-                    distance: Math.round((d + sigma * gauss()) * 1000) / 1000,
-                    status: 'active',
-                    note: ''
-                });
-            }
+            distance(a, b);
+            if (rand() < 0.4) distance(a, b, 0, 2);
         }
     }
+
+    // Distance of point p from the fence / wall line a–b (horizontal), with tape noise.
+    const offset = (a, b, p) => {
+        const [A, B, P] = [a, b, p].map(n => at.get(n));
+        const s = Math.abs((B.x - A.x) * (P.y - A.y) - (B.y - A.y) * (P.x - A.x)) / Math.hypot(B.x - A.x, B.y - A.y);
+        const value = s < 1e-9 ? 0 : Math.round((s + 0.008 * gauss()) * 1000) / 1000;
+        add({ kind: 'offset', from: a, fromB: b, to: p, distance: value });
+    };
+    // The west fence: a post on its line, a tree measured from it, the apple tree as a check.
+    offset('Fence W1', 'Fence W2', 'Fence W3');
+    distance('Fence W1', 'Fence W3');
+    offset('Fence W1', 'Fence W2', 'Plum');
+    distance('Fence W1', 'Plum');
+    offset('Fence W1', 'Fence W2', 'Apple');
+    // The house is a rectangle: the south-west corner from one side and a square corner, the west side
+    // as a check.
+    distance('House SE', 'House SW');
+    add({ kind: 'angle', from: 'House NE', fromB: 'House SE', to: 'House SE', toB: 'House SW', distance: 90 });
+    distance('House NW', 'House SW');
+
     // One mistyped distance: last two digits swapped.
     const victim = garden.measurements.find(m => m.from === 'Apple' && m.to === 'Walnut' && m.toH === 0) || garden.measurements[5];
     const s = victim.distance.toFixed(2);

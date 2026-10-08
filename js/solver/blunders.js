@@ -4,7 +4,8 @@
 // 2. After adjustment: Baarda data snooping on standardized residuals, iteratively removing the worst.
 // In both cases the typo variants of the entered number that fit the prediction are offered as corrections.
 
-import { solveNetwork, rowFor, quadForm, measurementSigma } from './adjust.js';
+import { solveNetwork, rowForMeasurement, quadForm } from './adjust.js';
+import { kindOf, observationSigma, pointsOfMeasurement, angleDiff, normalizeAngle, toDisplayUnits } from './observations.js';
 
 export const CRITICAL_W = 3.29; // two-sided 0.1 % test value of the normal distribution
 
@@ -120,32 +121,45 @@ export function suggestCorrections(raw, predicted, tol, max = 3) {
         .map(({ value, kind }) => ({ value, kind }));
 }
 
+// Predicted value of a measurement from the solution, in display units (m, or ° for angles):
+// { predicted, sigmaPred, sigma (a priori σ of the measurement) } or null when a point is not placed.
 function predict(solution, m) {
-    const row = rowFor(solution, m.from, m.fromH, m.to, m.toH);
+    const row = rowForMeasurement(solution, m);
     if (!row) return null;
-    return { predicted: row.dist, sigmaPred: Math.sqrt(quadForm(solution, row)) };
+    return {
+        predicted: row.value,
+        sigmaPred: toDisplayUnits(m, Math.sqrt(quadForm(solution, row))),
+        sigma: toDisplayUnits(m, observationSigma(m, solution.settings))
+    };
 }
 
-// Checks a new measurement m = { from, fromH, to, toH, distance, raw? } against the current solution.
-// Returns { status: 'ok' | 'suspect' | 'unknown', reason?, predicted?, tol?, deviation?, suggestions? }.
-export function checkMeasurement(solution, m, { k = CRITICAL_W, maxPredSigma = 0.25 } = {}) {
-    const pa = solution.points.get(m.from);
-    const pb = solution.points.get(m.to);
-    if (!pa?.placed || !pb?.placed) return { status: 'unknown', reason: 'unplaced' };
-    if (pa.status === 'weak' || pb.status === 'weak') return { status: 'unknown', reason: 'weak' };
+// Measured minus predicted, in display units (angles are compared modulo 180°).
+function deviationOf(m, predicted) {
+    return kindOf(m) === 'angle' ? angleDiff(m.distance, predicted) : m.distance - predicted;
+}
+
+// Likely corrections of a value that does not fit. Angles: the mirror value 180° − θ (the shape was the
+// other way round when it was saved); distances and offsets: typing slips.
+function corrections(m, predicted, tol) {
+    if (kindOf(m) !== 'angle') return suggestCorrections(m.raw ?? m.distance, predicted, tol);
+    const mirror = normalizeAngle(180 - m.distance);
+    return Math.abs(angleDiff(mirror, predicted)) <= tol && Math.abs(angleDiff(mirror, m.distance)) > 1e-9 ? [{ value: mirror, kind: 'mirror' }] : [];
+}
+
+// Checks a new measurement (any kind: { kind, from, fromB, fromH, to, toB, toH, distance, raw? }) against the
+// current solution. Returns { status: 'ok' | 'suspect' | 'unknown', reason?, predicted?, tol?, deviation?,
+// suggestions? }, values in display units.
+export function checkMeasurement(solution, m, { k = CRITICAL_W, maxPredSigma = 0.25, maxPredSigmaAngle = 10 } = {}) {
+    const pts = pointsOfMeasurement(m).map(n => solution.points.get(n));
+    if (pts.some(p => !p?.placed)) return { status: 'unknown', reason: 'unplaced' };
+    if (pts.some(p => p.status === 'weak')) return { status: 'unknown', reason: 'weak' };
     const p = predict(solution, m);
-    if (!p || !(p.sigmaPred <= maxPredSigma)) return { status: 'unknown', reason: 'uncertain' };
-    const sigma = measurementSigma(m.distance, solution.settings);
-    const tol = k * Math.sqrt(sigma * sigma + p.sigmaPred * p.sigmaPred);
-    const deviation = m.distance - p.predicted;
+    const limit = kindOf(m) === 'angle' ? maxPredSigmaAngle : maxPredSigma;
+    if (!p || !(p.sigmaPred <= limit)) return { status: 'unknown', reason: 'uncertain' };
+    const tol = k * Math.sqrt(p.sigma * p.sigma + p.sigmaPred * p.sigmaPred);
+    const deviation = deviationOf(m, p.predicted);
     if (Math.abs(deviation) <= tol) return { status: 'ok', predicted: p.predicted, tol, deviation };
-    return {
-        status: 'suspect',
-        predicted: p.predicted,
-        tol,
-        deviation,
-        suggestions: suggestCorrections(m.raw ?? m.distance, p.predicted, tol)
-    };
+    return { status: 'suspect', predicted: p.predicted, tol, deviation, suggestions: corrections(m, p.predicted, tol) };
 }
 
 // Iterative data snooping. Returns { solution, initial, suspects: [{ id, w, r, predicted, tol, suggestions }] }
@@ -176,9 +190,8 @@ export function snoop(input, { critical = null, maxRemovals = 5, minRedundancy =
         const m = byId.get(f.id);
         const p = predict(solution, m);
         if (!p) return { ...f, predicted: null, suggestions: [] };
-        const sigma = measurementSigma(m.distance, solution.settings);
-        const tol = CRITICAL_W * Math.sqrt(sigma * sigma + p.sigmaPred * p.sigmaPred);
-        return { ...f, predicted: p.predicted, tol, suggestions: suggestCorrections(m.raw ?? m.distance, p.predicted, tol) };
+        const tol = CRITICAL_W * Math.sqrt(p.sigma * p.sigma + p.sigmaPred * p.sigmaPred);
+        return { ...f, predicted: p.predicted, tol, suggestions: corrections(m, p.predicted, tol) };
     });
     return { solution, initial, suspects };
 }

@@ -39,6 +39,11 @@ function applyOp(garden, op) {
             if (m) Object.assign(m, op.changes);
             break;
         }
+        case 'updatePoint': {
+            const p = garden.points.find(x => x.name === op.name);
+            if (p) Object.assign(p, op.changes);
+            break;
+        }
         case 'addBlocked':
             garden.blocked.push({ a: op.a, b: op.b });
             break;
@@ -85,6 +90,11 @@ class BaseStore {
 
     updateMeasurement(id, changes) {
         return this.mutate({ type: 'updateMeasurement', id, changes });
+    }
+
+    // changes: { sketchX, sketchY, category, notes }
+    updatePoint(name, changes) {
+        return this.mutate({ type: 'updatePoint', name, changes });
     }
 
     addBlocked(a, b) {
@@ -228,6 +238,15 @@ export class GoogleStore extends BaseStore {
 
     async persist(op) {
         if (op.type === 'saveSettings') this.queue = this.queue.filter(q => q.type !== 'saveSettings');
+        if (op.type === 'updatePoint') {
+            // Repeated moves of the same point: send only the latest (the one being sent now stays).
+            const busy = this.flushing ? this.queue[0] : null;
+            this.queue = this.queue.filter(q => {
+                if (q === busy || q.type !== 'updatePoint' || q.name !== op.name) return true;
+                op = { ...op, changes: { ...q.changes, ...op.changes } };
+                return false;
+            });
+        }
         this.queue.push(op);
         storage.set(this.queueKey, this.queue);
         this.saveCache();
@@ -268,10 +287,20 @@ export class GoogleStore extends BaseStore {
     async execute(op) {
         switch (op.type) {
             case 'addPoint':
+                if (Number.isFinite(op.point.sketchX)) {
+                    await this.ensureColumn('points', TABS.points, 'sketch_x');
+                    await this.ensureColumn('points', TABS.points, 'sketch_y');
+                }
                 await sheets.appendRows(this.id, TABS.points, [recordToRow(this.headers('points'), pointToRecord(op.point))]);
                 break;
-            case 'addMeasurement':
-                await sheets.appendRows(this.id, TABS.measurements, [recordToRow(this.headers('measurements'), measurementToRecord(op.measurement))]);
+            case 'addMeasurement': {
+                const record = measurementToRecord(op.measurement);
+                if (record.kind) for (const column of ['kind', 'from_b', 'to_b']) await this.ensureColumn('measurements', TABS.measurements, column);
+                await sheets.appendRows(this.id, TABS.measurements, [recordToRow(this.headers('measurements'), record)]);
+                break;
+            }
+            case 'updatePoint':
+                await this.updatePointRow(op.name, op.changes);
                 break;
             case 'addBlocked':
                 await sheets.appendRows(this.id, TABS.blocked, [recordToRow(this.headers('blocked'), { from: op.a, to: op.b })]);
@@ -310,6 +339,25 @@ export class GoogleStore extends BaseStore {
         this.garden.headers = { ...(this.garden.headers || {}), [key]: headers };
         this.saveCache();
         return col;
+    }
+
+    // Writes changed point fields (sketch position, category, notes) into the point's row.
+    async updatePointRow(name, changes) {
+        const keyMap = { sketchX: 'sketch_x', sketchY: 'sketch_y', category: 'category', notes: 'notes' };
+        const nameCol = this.headers('points').indexOf('name');
+        if (nameCol < 0) return;
+        const letter = columnLetter(nameCol);
+        const [values] = await sheets.batchGet(this.id, [`${quoteSheet(TABS.points)}!${letter}:${letter}`]);
+        const idx = values.findIndex((row, i) => i > 0 && String(row[0] ?? '').trim() === name);
+        if (idx < 0) return; // row was deleted in the sheet meanwhile
+        const record = pointToRecord({ name, ...changes });
+        const data = [];
+        for (const [field, column] of Object.entries(keyMap)) {
+            if (!(field in changes)) continue;
+            const col = await this.ensureColumn('points', TABS.points, column);
+            data.push({ range: `${quoteSheet(TABS.points)}!${columnLetter(col)}${idx + 1}`, values: [[record[column]]] });
+        }
+        if (data.length) await sheets.batchUpdateValues(this.id, data);
     }
 
     async updateMeasurementRow(id, changes) {

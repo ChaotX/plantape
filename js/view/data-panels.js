@@ -4,6 +4,8 @@ import { t } from '../i18n.js';
 import { escapeHtml, fmt, debounce } from '../util.js';
 import { CATEGORY_COLORS } from './plan-view.js';
 import { PAPERS, SCALES } from '../export.js';
+import { kindOf } from '../solver/observations.js';
+import { lineLabel } from './describe.js';
 
 export class PointsPanel {
     constructor(el, app) {
@@ -55,11 +57,17 @@ export class MeasurementsPanel {
             <tbody>${list.map(m => {
                 const r = result.solution.measurements.get(m.id) || {};
                 const flag = m.status === 'excluded' ? 'excluded' : suspects.has(m.id) ? 'suspect' : r.used && r.w !== null && Math.abs(r.w) > 2 ? 'warn' : '';
+                const k = kindOf(m);
+                const angle = k === 'angle';
+                const from = k === 'distance' ? `${escapeHtml(m.from)} <small>${fmt(m.fromH, 1)}</small>` : escapeHtml(lineLabel(m.from, m.fromB));
+                const to = k === 'distance' ? `${escapeHtml(m.to)} <small>${fmt(m.toH, 1)}</small>`
+                    : k === 'offset' ? `⊥ ${escapeHtml(m.to)}` : `∠ ${escapeHtml(lineLabel(m.to, m.toB))}`;
+                const residual = !r.used || !Number.isFinite(r.residual) ? '–' : angle ? `${fmt(r.residual, 2)}°` : fmt(r.residual * 1000, 0);
                 return `<tr class="${flag}" title="${escapeHtml([m.timestamp, m.note].filter(Boolean).join(' · '))}">
-                    <td>${escapeHtml(m.from)} <small>${fmt(m.fromH, 1)}</small></td>
-                    <td>${escapeHtml(m.to)} <small>${fmt(m.toH, 1)}</small></td>
-                    <td class="num">${fmt(m.distance, 3)}</td>
-                    <td class="num">${r.used && Number.isFinite(r.residual) ? fmt(r.residual * 1000, 0) : '–'}</td>
+                    <td>${from}</td>
+                    <td>${to}</td>
+                    <td class="num">${angle ? `${fmt(m.distance, 1)}°` : fmt(m.distance, 3)}</td>
+                    <td class="num">${residual}</td>
                     <td class="num">${r.used ? (r.w === null ? `<span title="${escapeHtml(t('uncheckedHelp'))}">·</span>` : fmt(r.w, 1)) : '–'}</td>
                     <td><button type="button" class="tiny" data-action="toggle" data-id="${escapeHtml(m.id)}">${escapeHtml(t(m.status === 'excluded' ? 'include' : 'exclude'))}</button></td>
                 </tr>`;
@@ -113,6 +121,8 @@ export class SettingsPanel {
                 <label class="field">${escapeHtml(t('heightPresets'))}<input type="text" data-setting="heights" value="${escapeHtml(s.heights.join('; '))}"></label>
                 <label class="field">${escapeHtml(t('sigmaConst'))}<input type="number" min="0.1" step="0.5" data-setting="sigmaConst" value="${fmt(s.sigmaConst * 1000, 1)}"></label>
                 <label class="field">${escapeHtml(t('sigmaRel'))}<input type="number" min="0" step="0.5" data-setting="sigmaRel" value="${fmt(s.sigmaRel * 1000, 1)}"></label>
+                <label class="field">${escapeHtml(t('lineSigma'))}<input type="number" min="0" step="0.5" data-setting="lineSigma" value="${fmt(s.lineSigma * 100, 1)}"></label>
+                <label class="field">${escapeHtml(t('angleSigma'))}<input type="number" min="0.1" step="0.5" data-setting="angleSigma" value="${fmt(s.angleSigma, 1)}"></label>
                 <label class="check"><input type="checkbox" data-setting="autoExclude"${s.autoExclude ? ' checked' : ''}> ${escapeHtml(t('autoExclude'))}</label>
             </section>
             <section>
@@ -155,6 +165,12 @@ export class SettingsPanel {
             const v = Number(el.value);
             if (Number.isFinite(v) && v >= 0) s[key] = v / 1000;
             if (key === 'sigmaConst' && s[key] <= 0) s[key] = 0.0001;
+        } else if (key === 'lineSigma') {
+            const v = Number(el.value);
+            if (Number.isFinite(v) && v >= 0) s.lineSigma = v / 100;
+        } else if (key === 'angleSigma') {
+            const v = Number(el.value);
+            if (Number.isFinite(v) && v > 0) s.angleSigma = v;
         } else if (key === 'tapeLength') {
             const v = Number(el.value);
             if (v > 0) s[key] = v;

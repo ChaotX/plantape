@@ -2,6 +2,8 @@
 
 import { escapeHtml, fmt } from '../util.js';
 import { t } from '../i18n.js';
+import { kindOf } from '../solver/observations.js';
+import { isLine, lineEnds, lineKey } from './describe.js';
 
 export const CATEGORY_COLORS = {
     building: '#8d6e63',
@@ -37,7 +39,8 @@ export function niceLength(target) {
     return 10 * p;
 }
 
-export function placedBounds(solution) {
+// Bounds of the placed points (and of extra plan positions such as sketched points, which have no z).
+export function placedBounds(solution, extra = []) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of solution?.points?.values() || []) {
         if (!p.placed) continue;
@@ -45,7 +48,12 @@ export function placedBounds(solution) {
         minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
         minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
     }
+    for (const p of extra) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
     if (!Number.isFinite(minX)) return null;
+    if (!Number.isFinite(minZ)) minZ = maxZ = 0;
     return { minX, minY, maxX, maxY, minZ, maxZ };
 }
 
@@ -81,39 +89,147 @@ export function renderScene(scene, tf, style) {
     const categories = new Map(garden.points.map(p => [p.name, p.category || '']));
     const sw = style.stroke;
 
-    // Measurement lines
-    if (options.lines !== false) {
-        for (const m of garden.measurements) {
-            const a = P.get(m.from);
-            const b = P.get(m.to);
-            if (!a?.placed || !b?.placed) continue;
-            const r = solution.measurements.get(m.id) || {};
-            let color = '#90a4ae';
-            let width = sw;
-            let dash = '';
-            if (m.status === 'excluded') {
-                color = '#b0bec5';
-                dash = `${sw * 4} ${sw * 3}`;
-            } else if (scene.suspects?.has(m.id)) {
-                color = '#d32f2f';
-                width = sw * 2.5;
-            } else if (r.used && r.w !== null && Math.abs(r.w) > 2) {
-                color = '#f57c00';
-                width = sw * 1.8;
-            } else if (r.used && r.r < 0.05) {
-                dash = `${sw} ${sw * 2}`;
-            }
-            const title = `${m.from} (${fmt(m.fromH, 1)}) → ${m.to} (${fmt(m.toH, 1)}): ${fmt(m.distance, 3)} m` +
-                (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual * 1000, 1)} mm` : '') + (r.w != null ? `, w = ${fmt(r.w, 2)}` : '');
-            out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="${color}" stroke-width="${width}"${dash ? ` stroke-dasharray="${dash}"` : ''} data-meas="${escapeHtml(m.id)}"><title>${escapeHtml(title)}</title></line>`);
+    // Measurement colour: excluded, suspect, large residual, unchecked.
+    const styleOf = m => {
+        const r = solution.measurements.get(m.id) || {};
+        let color = '#90a4ae';
+        let width = sw;
+        let dash = '';
+        if (m.status === 'excluded') {
+            color = '#b0bec5';
+            dash = `${sw * 4} ${sw * 3}`;
+        } else if (scene.suspects?.has(m.id)) {
+            color = '#d32f2f';
+            width = sw * 2.5;
+        } else if (r.used && r.w !== null && Math.abs(r.w) > 2) {
+            color = '#f57c00';
+            width = sw * 1.8;
+        } else if (r.used && r.r < 0.05) {
+            dash = `${sw} ${sw * 2}`;
         }
+        return { r, color, width, dash };
+    };
+    const placedAll = names => names.every(n => P.get(n)?.placed);
+    const seg = (a, b, color, width, extra = '') => `<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="${color}" stroke-width="${width}"${extra}/>`;
+    const foot = (A, B, p) => {
+        const dx = B.x - A.x;
+        const dy = B.y - A.y;
+        const L2 = dx * dx + dy * dy || 1;
+        const t = ((p.x - A.x) * dx + (p.y - A.y) * dy) / L2;
+        return { t, x: A.x + t * dx, y: A.y + t * dy };
+    };
+
+    if (options.lines !== false) {
+        // Reference lines (fences, walls…): dashed, spanning their ends and the feet of their offsets.
+        const refs = new Map();
+        const addRef = (a, b, p = null) => {
+            if (!placedAll([a, b])) return;
+            const key = a < b ? lineKey(a, b) : lineKey(b, a);
+            if (!refs.has(key)) refs.set(key, { a: P.get(a < b ? a : b), b: P.get(a < b ? b : a), lo: 0, hi: 1 });
+            if (p) {
+                const ref = refs.get(key);
+                const f = foot(ref.a, ref.b, p);
+                ref.lo = Math.min(ref.lo, f.t);
+                ref.hi = Math.max(ref.hi, f.t);
+            }
+        };
+        for (const m of garden.measurements) {
+            const k = kindOf(m);
+            if (k === 'offset' && m.status !== 'excluded') addRef(m.from, m.fromB, P.get(m.to)?.placed ? P.get(m.to) : null);
+            else if (k === 'angle' && m.status !== 'excluded') {
+                addRef(m.from, m.fromB);
+                addRef(m.to, m.toB);
+            }
+        }
+        for (const { a, b, lo, hi } of refs.values()) {
+            const at = t => ({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) });
+            out.push(seg(at(lo - 0.03), at(hi + 0.03), '#8d6e63', sw * 1.4, ` stroke-dasharray="${sw * 8} ${sw * 3}" opacity="0.7"`));
+        }
+
+        for (const m of garden.measurements) {
+            const k = kindOf(m);
+            const { r, color, width, dash } = styleOf(m);
+            const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
+            if (k === 'distance') {
+                if (!placedAll([m.from, m.to])) continue;
+                const a = P.get(m.from);
+                const b = P.get(m.to);
+                const title = `${m.from} (${fmt(m.fromH, 1)}) → ${m.to} (${fmt(m.toH, 1)}): ${fmt(m.distance, 3)} m` +
+                    (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual * 1000, 1)} mm` : '') + (r.w != null ? `, w = ${fmt(r.w, 2)}` : '');
+                out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="${color}" stroke-width="${width}"${dashAttr} data-meas="${escapeHtml(m.id)}"><title>${escapeHtml(title)}</title></line>`);
+                if (style.hit) out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="transparent" stroke-width="${style.hit * 0.9}" data-line="${escapeHtml(lineKey(m.from, m.to))}" style="cursor:pointer"><title>${escapeHtml(`${m.from}–${m.to}`)}</title></line>`);
+            } else if (k === 'offset') {
+                if (!placedAll([m.from, m.fromB, m.to]) || m.distance === 0) continue;
+                const p = P.get(m.to);
+                const f = foot(P.get(m.from), P.get(m.fromB), p);
+                const title = `${m.from}–${m.fromB} ⊥ ${m.to}: ${fmt(m.distance, 3)} m` + (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual * 1000, 1)} mm` : '');
+                out.push(`<line x1="${X(p.x)}" y1="${Y(p.y)}" x2="${X(f.x)}" y2="${Y(f.y)}" stroke="${color}" stroke-width="${width}"${dashAttr}><title>${escapeHtml(title)}</title></line>`);
+            } else {
+                if (!placedAll([m.from, m.fromB, m.to, m.toB])) continue;
+                out.push(angleMark(m, color === '#90a4ae' ? '#6d4c41' : color, r));
+            }
+        }
+    }
+
+    // Angle mark: at a shared corner a small square (90°) or arc, otherwise a label between the lines.
+    function angleMark(m, color, r) {
+        const [A, B, C, D] = [m.from, m.fromB, m.to, m.toB].map(n => P.get(n));
+        const ends1 = [m.from, m.fromB];
+        const ends2 = [m.to, m.toB];
+        const shared = ends1.find(n => ends2.includes(n));
+        const rad = style.font * 1.1;
+        const title = `${m.from}–${m.fromB} ∠ ${m.to}–${m.toB}: ${fmt(m.distance, 1)}°` + (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual, 2)}°` : '');
+        if (shared) {
+            const V = P.get(shared);
+            const o1 = P.get(ends1.find(n => n !== shared));
+            const o2 = P.get(ends2.find(n => n !== shared));
+            const u = q => {
+                const dx = X(q.x) - X(V.x);
+                const dy = Y(q.y) - Y(V.y);
+                const l = Math.hypot(dx, dy) || 1;
+                return { x: dx / l, y: dy / l };
+            };
+            const u1 = u(o1);
+            const u2 = u(o2);
+            const vx = X(V.x);
+            const vy = Y(V.y);
+            const interior = (Math.acos(Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y))) * 180) / Math.PI;
+            if (Math.abs(m.distance - 90) < 0.5) {
+                const s = rad * 0.8;
+                return `<path d="M${vx + u1.x * s} ${vy + u1.y * s} L${vx + (u1.x + u2.x) * s} ${vy + (u1.y + u2.y) * s} L${vx + u2.x * s} ${vy + u2.y * s}" fill="none" stroke="${color}" stroke-width="${sw * 1.2}"><title>${escapeHtml(title)}</title></path>`;
+            }
+            const sweep = u1.x * u2.y - u1.y * u2.x > 0 ? 1 : 0;
+            const mid = { x: u1.x + u2.x, y: u1.y + u2.y };
+            const ml = Math.hypot(mid.x, mid.y) || 1;
+            return `<path d="M${vx + u1.x * rad} ${vy + u1.y * rad} A${rad} ${rad} 0 0 ${sweep} ${vx + u2.x * rad} ${vy + u2.y * rad}" fill="none" stroke="${color}" stroke-width="${sw * 1.2}"><title>${escapeHtml(title)}</title></path>` +
+                haloText(vx + (mid.x / ml) * rad * 1.5 - style.font * 0.6, vy + (mid.y / ml) * rad * 1.5 + style.font * 0.3, style.font * 0.75, color, `${fmt(interior, 0)}°`);
+        }
+        const m2 = { x: (X(C.x) + X(D.x)) / 2, y: (Y(C.y) + Y(D.y)) / 2 };
+        const m1 = { x: (X(A.x) + X(B.x)) / 2, y: (Y(A.y) + Y(B.y)) / 2 };
+        return `<line x1="${m1.x}" y1="${m1.y}" x2="${m2.x}" y2="${m2.y}" stroke="${color}" stroke-width="${sw * 0.8}" stroke-dasharray="${sw} ${sw * 3}"><title>${escapeHtml(title)}</title></line>` +
+            haloText(m2.x + style.font * 0.3, m2.y - style.font * 0.3, style.font * 0.75, color, `∠${fmt(m.distance, 0)}°`);
+    }
+
+    // Selected line(s) in the measuring form
+    for (const [key, color] of [[scene.station, '#1565c0'], [scene.target, '#2e7d32']]) {
+        if (!isLine(key)) continue;
+        const [a, b] = lineEnds(key);
+        if (placedAll([a, b])) out.push(seg(P.get(a), P.get(b), color, style.pointR * 1.4, ' stroke-linecap="round" opacity="0.35"'));
     }
 
     // Suggested measurements
     (scene.hints || []).forEach((h, i) => {
-        const a = P.get(h.from);
-        const b = P.get(h.to);
-        if (!a?.placed || !b?.placed) return;
+        let a;
+        let b;
+        if (h.kind === 'offset') {
+            if (!placedAll([h.from, h.fromB, h.to])) return;
+            a = P.get(h.to);
+            b = foot(P.get(h.from), P.get(h.fromB), a);
+        } else {
+            a = P.get(h.from);
+            b = P.get(h.to);
+            if (!a?.placed || !b?.placed) return;
+        }
         out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="#1565c0" stroke-width="${sw * 1.5}" stroke-dasharray="${sw * 6} ${sw * 4}" opacity="0.8"/>`);
         const mx = (X(a.x) + X(b.x)) / 2;
         const my = (Y(a.y) + Y(b.y)) / 2;
@@ -155,6 +271,29 @@ export function renderScene(scene, tf, style) {
                 out.push(haloText(cx + r * 1.6, cy + style.font * 0.75, style.font * 0.75, '#546e7a', `${p.z >= 0 ? '+' : ''}${fmt(p.z, 2)}`));
             }
         }
+    }
+
+    // Points that are not computed yet, at their sketched position (hollow).
+    for (const [name, s] of scene.sketchPos || []) {
+        if (P.get(name)?.placed) continue;
+        const cx = X(s.x);
+        const cy = Y(s.y);
+        const r = style.pointR;
+        const color = CATEGORY_COLORS[categories.get(name)] || CATEGORY_COLORS.other;
+        if (name === scene.station) out.push(`<circle cx="${cx}" cy="${cy}" r="${r * 2.4}" fill="none" stroke="#1565c0" stroke-width="${sw * 2}"/>`);
+        if (name === scene.target) out.push(`<circle cx="${cx}" cy="${cy}" r="${r * 2.4}" fill="none" stroke="#2e7d32" stroke-width="${sw * 2}" stroke-dasharray="${sw * 3} ${sw * 2}"/>`);
+        if (name === scene.selected) out.push(`<circle cx="${cx}" cy="${cy}" r="${r * 3}" fill="#ffeb3b" fill-opacity="0.5"/>`);
+        out.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="#fff" stroke="${color}" stroke-width="${sw * 1.6}" stroke-dasharray="${sw * 2} ${sw * 1.5}"/>`);
+        if (style.hit) out.push(`<circle cx="${cx}" cy="${cy}" r="${style.hit}" fill="transparent" data-point="${escapeHtml(name)}" style="cursor:pointer"><title>${escapeHtml(`${name} – ${t('sketchedOnly')}`)}</title></circle>`);
+        if (options.labels !== false) out.push(haloText(cx + r * 1.6, cy - r * 0.6, style.font, '#78909c', `${escapeHtml(name)} ?`));
+    }
+
+    // A point being dragged in move mode
+    if (scene.drag) {
+        const { name, x, y } = scene.drag;
+        const from = P.get(name)?.placed ? P.get(name) : scene.sketchPos?.get(name);
+        if (from) out.push(seg(from, { x, y }, '#1565c0', sw, ` stroke-dasharray="${sw * 3} ${sw * 2}"`));
+        out.push(`<circle cx="${X(x)}" cy="${Y(y)}" r="${style.pointR * 1.3}" fill="#1565c0" fill-opacity="0.35" stroke="#1565c0" stroke-width="${sw * 1.5}"/>`);
     }
     return out.join('');
 }
@@ -200,13 +339,18 @@ export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseS
 // ---- Interactive view ---------------------------------------------------------------------------
 
 export class PlanView {
-    constructor(svg, { onPointClick } = {}) {
+    // handlers: onSelect({ point } | { line: [a, b] }), onAdd(x, y) in add mode, onMove(name, x, y) in move mode
+    constructor(svg, { onSelect, onAdd, onMove } = {}) {
         this.svg = svg;
-        this.onPointClick = onPointClick;
+        this.onSelect = onSelect;
+        this.onAdd = onAdd;
+        this.onMove = onMove;
+        this.mode = 'pan'; // 'pan' | 'add' | 'move'
         this.scene = null;
         this.tf = null;
         this.pointers = new Map();
         this.moved = 0;
+        this.drag = null;
         this.bind();
         new ResizeObserver(() => (this.userMoved ? this.render() : this.fit())).observe(svg);
     }
@@ -216,6 +360,11 @@ export class PlanView {
         return { w: Math.max(r.width, 1), h: Math.max(r.height, 1) };
     }
 
+    setMode(mode) {
+        this.mode = mode;
+        this.svg.dataset.mode = mode;
+    }
+
     // Keeps the whole network in view until the user pans or zooms by hand.
     setScene(scene) {
         this.scene = scene;
@@ -223,20 +372,25 @@ export class PlanView {
         else this.render();
     }
 
+    bounds() {
+        return placedBounds(this.scene?.solution, this.scene?.sketchPos?.values() || []);
+    }
+
     fit() {
         this.userMoved = false;
         const { w, h } = this.size();
-        const b = placedBounds(this.scene?.solution);
+        const b = this.bounds();
+        const empty = Math.min(w, h) / 24; // a 20 m grid around the origin to sketch on
         if (!b) {
-            this.tf = { scale: 20, ox: w / 2, oy: h / 2 };
+            this.tf = { scale: empty, ox: w / 2, oy: h / 2 };
         } else {
             // Room for labels, the tool buttons (right) and the legend (bottom).
             const pad = { left: 24, right: 90, top: 28, bottom: 64 };
-            const bw = Math.max(b.maxX - b.minX, 1);
-            const bh = Math.max(b.maxY - b.minY, 1);
+            const bw = b.maxX - b.minX;
+            const bh = b.maxY - b.minY;
             const aw = Math.max(w - pad.left - pad.right, 40);
             const ah = Math.max(h - pad.top - pad.bottom, 40);
-            const scale = Math.min(aw / bw, ah / bh);
+            const scale = bw < 1 && bh < 1 ? empty : Math.min(aw / Math.max(bw, 1), ah / Math.max(bh, 1));
             this.tf = {
                 scale,
                 ox: pad.left + aw / 2 - ((b.minX + b.maxX) / 2) * scale,
@@ -262,10 +416,11 @@ export class PlanView {
 
     centerOn(name) {
         const p = this.scene?.solution?.points.get(name);
-        if (!p?.placed) return;
+        const at = p?.placed ? p : this.scene?.sketchPos?.get(name);
+        if (!at) return;
         const { w, h } = this.size();
         this.userMoved = true;
-        this.tf = { ...this.tf, ox: w / 2 - p.x * this.tf.scale, oy: h / 2 + p.y * this.tf.scale };
+        this.tf = { ...this.tf, ox: w / 2 - at.x * this.tf.scale, oy: h / 2 + at.y * this.tf.scale };
         this.render();
     }
 
@@ -275,12 +430,17 @@ export class PlanView {
         return this.scene?.solution ? autoEllipseScale(this.scene.solution, this.tf.scale) : 1;
     }
 
+    // Screen (svg pixels) → plan coordinates in metres.
+    toWorld(p) {
+        return { x: (p.x - this.tf.ox) / this.tf.scale, y: (this.tf.oy - p.y) / this.tf.scale };
+    }
+
     render() {
         if (!this.scene || !this.tf) return;
         const { w, h } = this.size();
         this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
         const ellipseScale = this.ellipseScale();
-        const scene = { ...this.scene, options: { ...this.scene.options, ellipseScale } };
+        const scene = { ...this.scene, drag: this.drag, options: { ...this.scene.options, ellipseScale } };
         const b = placedBounds(this.scene.solution);
         const zRange = this.scene.options?.colorBy === 'height' && b && b.maxZ - b.minZ > 0.01 ? [b.minZ, b.maxZ] : null;
         this.svg.innerHTML =
@@ -323,19 +483,29 @@ export class PlanView {
             svg.setPointerCapture(e.pointerId);
             this.pointers.set(e.pointerId, local(e));
             this.moved = 0;
-            this.downTarget = e.target.closest?.('[data-point]')?.dataset.point || null;
+            this.downPoint = e.target.closest?.('[data-point]')?.dataset.point || null;
+            this.downLine = e.target.closest?.('[data-line]')?.dataset.line || null;
+            this.downAt = local(e);
+            // Move mode: dragging a point moves it instead of panning the plan.
+            if (this.mode === 'move' && this.downPoint && this.pointers.size === 1 && this.tf) this.drag = { name: this.downPoint, ...this.toWorld(this.downAt) };
         });
         svg.addEventListener('pointermove', e => {
             if (!this.pointers.has(e.pointerId) || !this.tf) return;
             const prev = this.pointers.get(e.pointerId);
             const cur = local(e);
-            if (this.pointers.size === 1) {
+            if (this.drag && this.pointers.size === 1) {
+                this.moved += Math.hypot(cur.x - prev.x, cur.y - prev.y);
+                this.pointers.set(e.pointerId, cur);
+                this.drag = { name: this.drag.name, ...this.toWorld(cur) };
+                this.render();
+            } else if (this.pointers.size === 1) {
                 this.tf = { ...this.tf, ox: this.tf.ox + cur.x - prev.x, oy: this.tf.oy + cur.y - prev.y };
                 this.moved += Math.hypot(cur.x - prev.x, cur.y - prev.y);
                 if (this.moved > 6) this.userMoved = true;
                 this.pointers.set(e.pointerId, cur);
                 this.render();
             } else if (this.pointers.size === 2) {
+                this.drag = null;
                 const [other] = [...this.pointers].filter(([id]) => id !== e.pointerId).map(([, p]) => p);
                 const before = Math.hypot(prev.x - other.x, prev.y - other.y);
                 const after = Math.hypot(cur.x - other.x, cur.y - other.y);
@@ -347,7 +517,25 @@ export class PlanView {
         const end = e => {
             if (!this.pointers.has(e.pointerId)) return;
             this.pointers.delete(e.pointerId);
-            if (this.pointers.size === 0 && this.moved < 6 && this.downTarget && this.onPointClick) this.onPointClick(this.downTarget);
+            if (this.pointers.size !== 0) return;
+            const drag = this.drag;
+            this.drag = null;
+            // Sketching and moving keep the view where it is, so the next tap lands where the user aims.
+            if (drag && this.moved >= 6 && e.type === 'pointerup') {
+                this.userMoved = true;
+                this.render();
+                this.onMove?.(drag.name, drag.x, drag.y);
+                return;
+            }
+            if (drag) this.render();
+            if (this.moved >= 6 || e.type === 'pointercancel') return;
+            if (this.downPoint) this.onSelect?.({ point: this.downPoint });
+            else if (this.downLine) this.onSelect?.({ line: lineEnds(this.downLine) });
+            else if (this.mode === 'add' && this.tf) {
+                const w = this.toWorld(this.downAt);
+                this.userMoved = true;
+                this.onAdd?.(w.x, w.y);
+            }
         };
         svg.addEventListener('pointerup', end);
         svg.addEventListener('pointercancel', end);

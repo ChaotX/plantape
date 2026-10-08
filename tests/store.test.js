@@ -242,3 +242,70 @@ test('hand-made sheet: missing tabs are added, rows without id get one on write-
     const after = sheetRows(id, 'Measurements');
     assert.equal(after[1][after[0].indexOf('status')], 'excluded');
 });
+
+test('offsets and angles round-trip, adding their columns to an old sheet', async () => {
+    const id = 'old-columns';
+    books.set(id, {
+        title: 'Old garden',
+        sheets: new Map([['Measurements', [
+            ['id', 'from', 'to', 'distance', 'status'],
+            ['m1', 'A', 'B', '10', ''],
+            ['m2', 'B', 'C', '6', ''],
+            ['m3', 'C', 'D', '10', ''],
+            ['m4', 'D', 'A', '6', '']
+        ]]])
+    });
+    const store = new GoogleStore(id);
+    await store.load();
+    await store.addMeasurement({ id: 'ang', timestamp: 't', kind: 'angle', from: 'A', fromB: 'B', to: 'B', toB: 'C', distance: 90, status: 'active', note: '' });
+    await store.addMeasurement({ id: 'off', timestamp: 't', kind: 'offset', from: 'A', fromB: 'B', to: 'E', distance: 0, status: 'active', note: '' });
+    const header = sheetRows(id, 'Measurements')[0];
+    assert.ok(['kind', 'from_b', 'to_b'].every(c => header.includes(c)), header.join());
+    const garden = await new GoogleStore(id).load();
+    const ang = garden.measurements.find(m => m.id === 'ang');
+    assert.deepEqual([ang.kind, ang.from, ang.fromB, ang.to, ang.toB, ang.distance], ['angle', 'A', 'B', 'B', 'C', 90]);
+    const off = garden.measurements.find(m => m.id === 'off');
+    assert.deepEqual([off.kind, off.fromB, off.to, off.distance], ['offset', 'B', 'E', 0]);
+    assert.ok(garden.points.some(p => p.name === 'E'));
+    assert.equal(garden.measurements.find(m => m.id === 'm1').kind, undefined);
+});
+
+test('hand-typed angles are normalised to [0, 180)', async () => {
+    const id = 'angles';
+    books.set(id, {
+        title: 'Angles',
+        sheets: new Map([['Measurements', [
+            ['kind', 'from', 'from_b', 'to', 'to_b', 'distance'],
+            ['angle', 'A', 'B', 'C', 'D', '180'],
+            ['angle', 'A', 'B', 'C', 'D', '-37'],
+            ['angle', 'A', 'B', 'C', '', '90'],
+            ['offset', 'A', 'B', 'C', '', '1,5']
+        ]]])
+    });
+    const garden = await new GoogleStore(id).load();
+    assert.deepEqual(garden.measurements.map(m => m.distance), [0, 143, 1.5]);
+    assert.ok(garden.warnings.some(w => w.key === 'warnBadMeasurement'));
+});
+
+test('sketch positions are written to the point row; queued moves of a point are merged', async () => {
+    const store = await seededStore();
+    await store.updatePoint('C', { sketchX: 1.234, sketchY: -5 });
+    let rows = sheetRows(store.id, 'Points');
+    let row = rows.find(r => r[0] === 'C');
+    assert.equal(row[rows[0].indexOf('sketch_x')], 1.23);
+    assert.equal(row[rows[0].indexOf('sketch_y')], -5);
+    const flush = store.flush;
+    store.flush = async () => false; // hold the queue, as while offline
+    await store.updatePoint('D', { sketchX: 1, sketchY: 1 });
+    await store.updatePoint('D', { sketchX: 2, sketchY: 2 });
+    await store.updatePoint('A', { sketchX: 0, sketchY: 0 });
+    assert.equal(store.queue.filter(q => q.type === 'updatePoint' && q.name === 'D').length, 1);
+    store.flush = flush;
+    await store.flush();
+    rows = sheetRows(store.id, 'Points');
+    row = rows.find(r => r[0] === 'D');
+    assert.equal(row[rows[0].indexOf('sketch_x')], 2);
+    const garden = await new GoogleStore(store.id).load();
+    const d = garden.points.find(p => p.name === 'D');
+    assert.deepEqual([d.sketchX, d.sketchY], [2, 2]);
+});
