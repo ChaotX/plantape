@@ -8,6 +8,7 @@ export default {
     signIn: 'Bejelentkezés Google-fiókkal',
     notConfigured: 'Az alkalmazás ezen példányában nincs beállítva a Google-bejelentkezés (lásd README). Google nélkül is használhatod.',
     tryLocal: 'Használat Google nélkül (ebben a böngészőben tárolva)',
+    privacyPolicy: 'Adatvédelmi tájékoztató',
     gardens: 'Kertek',
     chooseGarden: 'Kertek',
     openFromDrive: 'Táblázat megnyitása a Google Drive-ról',

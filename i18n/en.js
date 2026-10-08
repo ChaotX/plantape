@@ -8,6 +8,7 @@ export default {
     signIn: 'Sign in with Google',
     notConfigured: 'Google sign-in is not configured for this copy of the app (see README). You can still use it without Google.',
     tryLocal: 'Use without Google (stored in this browser)',
+    privacyPolicy: 'Privacy policy',
     gardens: 'Gardens',
     chooseGarden: 'Gardens',
     openFromDrive: 'Open a spreadsheet from Google Drive',
