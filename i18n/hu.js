@@ -9,6 +9,7 @@ export default {
     notConfigured: 'Az alkalmazás ezen példányában nincs beállítva a Google-bejelentkezés (lásd README). Google nélkül is használhatod.',
     tryLocal: 'Használat Google nélkül (ebben a böngészőben tárolva)',
     privacyPolicy: 'Adatvédelmi tájékoztató',
+    termsOfService: 'Felhasználási feltételek',
     gardens: 'Kertek',
     chooseGarden: 'Kertek',
     openFromDrive: 'Táblázat megnyitása a Google Drive-ról',
