@@ -35,4 +35,4 @@ http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
         res.end(data);
     });
-}).listen(port, () => console.log(`Plantape: http://localhost:${port}  (Ctrl+C to stop)`));
+}).listen(port, () => console.log(`PlanTape: http://localhost:${port}  (Ctrl+C to stop)`));

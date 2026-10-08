@@ -1,7 +1,7 @@
 export default {
     // Start & gardens
     appTitle: 'Mérd fel a kertedet mérőszalaggal',
-    appIntro: 'Nevezd el a fő tereppontokat (épületsarkok, fák, kerítésoszlopok, járdapontok…), mérd le köztük a távolságokat egy egyszerű mérőszalaggal, a Plantape pedig kiszámítja a helyzetüket – minden új méréssel pontosabban.',
+    appIntro: 'Nevezd el a fő tereppontokat (épületsarkok, fák, kerítésoszlopok, járdapontok…), mérd le köztük a távolságokat egy egyszerű mérőszalaggal, a PlanTape pedig kiszámítja a helyzetüket – minden új méréssel pontosabban.',
     step1: 'Válaszd ki a pontot, ahol állsz, és egy pontot, amit elérsz a szalaggal.',
     step2: 'Írd be a távolságot; a lejtés felméréséhez a szalagot magasabban (1 m, 2 m) is tarthatod.',
     step3: 'Kövesd a javaslatokat: ezek a mérések javítják legtöbbet a térképet.',
@@ -187,7 +187,7 @@ export default {
     exportHelp: 'A PDF és az SVG méretarányos vektoros rajz, a most látható rétegekkel.',
     exportCsv: 'Koordináták (CSV)',
     exportJson: 'Kert (JSON)',
-    exportSubtitle: '{date} · {points} pont · {measurements} mérés · Plantape',
+    exportSubtitle: '{date} · {points} pont · {measurements} mérés · PlanTape',
     exportPaper: '{paper} · helyi koordináták méterben',
     switchGarden: '← Másik kert',
     resultsWritten: 'A koordináták bekerültek a táblázatba.',
@@ -207,7 +207,7 @@ export default {
     cat_other: 'Egyéb',
 
     // Errors
-    errNoAccess: 'Nincs hozzáférés ehhez a táblázathoz. Nyisd meg a „Táblázat megnyitása a Google Drive-ról” gombbal, hogy a Plantape engedélyt kapjon.',
+    errNoAccess: 'Nincs hozzáférés ehhez a táblázathoz. Nyisd meg a „Táblázat megnyitása a Google Drive-ról” gombbal, hogy a PlanTape engedélyt kapjon.',
     errNameRequired: 'Adj meg egy nevet.',
     errNameExists: 'Már van „{name}” nevű pont.',
     errBadLink: 'Ez nem tűnik Google-táblázat linknek.',

@@ -1,7 +1,7 @@
-# Plantape
+# PlanTape
 
 Measure up a garden with an ordinary tape measure. Name landmark points (building corners, trees, fence posts,
-path spots…), measure distances between them, and Plantape computes least-squares 3D positions. The positions
+path spots…), measure distances between them, and PlanTape computes least-squares 3D positions. The positions
 get more accurate with every measurement. Data lives in a Google Spreadsheet (one per garden), or in the browser
 if you don't want to use Google.
 

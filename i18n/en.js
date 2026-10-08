@@ -1,7 +1,7 @@
 export default {
     // Start & gardens
     appTitle: 'Measure your garden with a tape',
-    appIntro: 'Name landmark points (building corners, trees, fence posts, path spots…), measure distances between them with an ordinary tape measure, and Plantape computes their positions — more accurately with every measurement.',
+    appIntro: 'Name landmark points (building corners, trees, fence posts, path spots…), measure distances between them with an ordinary tape measure, and PlanTape computes their positions — more accurately with every measurement.',
     step1: 'Pick a point you stand at and a point you can reach with the tape.',
     step2: 'Enter the distance; optionally hold the tape higher (1 m, 2 m) to capture the slope.',
     step3: 'Follow the hints for the measurements that improve the map most.',
@@ -187,7 +187,7 @@ export default {
     exportHelp: 'PDF and SVG are vector drawings at true scale, with the currently visible layers.',
     exportCsv: 'Coordinates (CSV)',
     exportJson: 'Garden (JSON)',
-    exportSubtitle: '{date} · {points} points · {measurements} measurements · Plantape',
+    exportSubtitle: '{date} · {points} points · {measurements} measurements · PlanTape',
     exportPaper: '{paper} · local coordinates in metres',
     switchGarden: '← Other garden',
     resultsWritten: 'Coordinates written to the spreadsheet.',
@@ -207,7 +207,7 @@ export default {
     cat_other: 'Other',
 
     // Errors
-    errNoAccess: 'No access to this spreadsheet. Open it with “Open a spreadsheet from Google Drive” so Plantape gets permission.',
+    errNoAccess: 'No access to this spreadsheet. Open it with “Open a spreadsheet from Google Drive” so PlanTape gets permission.',
     errNameRequired: 'Enter a name.',
     errNameExists: 'A point named “{name}” already exists.',
     errBadLink: 'That does not look like a Google spreadsheet link.',

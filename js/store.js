@@ -186,7 +186,7 @@ export class GoogleStore extends BaseStore {
             { title: TABS.settings, rows: [HEADERS.settings, ...settingsToRows({ ...DEFAULT_SETTINGS, gardenName: name })] },
             { title: TABS.blocked, rows: [HEADERS.blocked] }
         ];
-        const res = await sheets.createSpreadsheet(`Plantape – ${name}`, tabs);
+        const res = await sheets.createSpreadsheet(`PlanTape – ${name}`, tabs);
         return new GoogleStore(res.spreadsheetId);
     }
 

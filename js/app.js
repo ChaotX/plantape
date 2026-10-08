@@ -1,4 +1,4 @@
-// Plantape main controller: screens, garden lifecycle, recomputation and actions.
+// PlanTape main controller: screens, garden lifecycle, recomputation and actions.
 
 import { t, setLanguage, getLanguage, applyTranslations, LANGUAGES } from './i18n.js';
 import { isConfigured, hasValidToken, requestToken, signOut } from './google-auth.js';
