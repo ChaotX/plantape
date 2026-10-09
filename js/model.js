@@ -260,6 +260,15 @@ export function solverInput(garden, prefer = null) {
     };
 }
 
+// The automatic datum (origin: the best-braced pair, axis: its best-linked neighbour) can move to other points
+// as measurements are added, which turns the whole plan. The first choice is kept: returns the settings
+// changes { origin, axis } to save, or null when both are set already (or nothing is placed yet).
+export function datumToKeep(settings, solution) {
+    const d = solution?.datum;
+    if ((settings.origin && settings.axis) || !d?.origin || !d?.axis) return null;
+    return { origin: d.origin, axis: d.axis };
+}
+
 // ---- Local file formats -------------------------------------------------------------------------
 
 export function gardenToJson(garden) {

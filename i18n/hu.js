@@ -207,7 +207,7 @@ export default {
     writeFailed: 'Az eredményt nem sikerült a táblázatba írni: {message}',
     localHelp: 'Ez a kert csak ebben a böngészőben tárolódik. Mentéshez használd lent a „Kert (JSON)” gombot.',
     datumSection: 'Koordináta-rendszer',
-    datumHelp: 'A kezdőpont a (0, 0, 0), az x tengely az irányponton megy át, az oldalpont a +y oldalon van.',
+    datumHelp: 'A kezdőpont a (0, 0, 0), az x tengely az irányponton megy át, az oldalpont a +y oldalon van. Az „automatikus” a mérésekből egyszer választja ki a kezdő- és iránypontot, utána megtartja őket, így a terv nem fordul el újabb mérésektől.',
     datumOrigin: 'Kezdőpont',
     datumAxis: 'Iránypont (+x irány)',
     datumSide: 'Oldalpont (+y oldal)',

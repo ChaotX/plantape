@@ -207,7 +207,7 @@ export default {
     writeFailed: 'Could not write the results to the sheet: {message}',
     localHelp: 'This garden is stored in this browser only. Use “Garden (JSON)” below for a backup.',
     datumSection: 'Coordinate frame',
-    datumHelp: 'The origin point is (0, 0, 0), the x axis points towards the axis point, and the side point is on the +y side.',
+    datumHelp: 'The origin point is (0, 0, 0), the x axis points towards the axis point, and the side point is on the +y side. “Automatic” picks the origin and axis from the measurements once and then keeps them, so the plan does not turn as measurements are added.',
     datumOrigin: 'Origin point',
     datumAxis: 'Axis point (+x direction)',
     datumSide: 'Side point (+y side)',

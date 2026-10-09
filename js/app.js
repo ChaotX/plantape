@@ -4,7 +4,7 @@ import { t, setLanguage, getLanguage, applyTranslations, LANGUAGES } from './i18
 import { isConfigured, hasValidToken, requestToken, signOut } from './google-auth.js';
 import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
-import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn } from './model.js';
+import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
@@ -104,6 +104,12 @@ function recompute(prefer = null) {
     const s = garden.settings;
     const res = snoop(solverInput(garden, prefer));
     const solution = s.autoExclude ? res.solution : res.initial;
+    const keep = datumToKeep(s, solution);
+    if (keep) {
+        // Same points as the solution used, so it needs no recompute.
+        Object.assign(s, keep);
+        state.store.saveSettings(s);
+    }
     const blocked = new Set(garden.blocked.map(b => pairKey(b.a, b.b)));
     state.result = { solution, suspects: res.suspects };
     state.hints = solution.u
