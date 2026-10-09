@@ -80,7 +80,7 @@ export function columnLetter(index) {
 }
 
 export function getSpreadsheet(id) {
-    return api('GET', `${BASE}/${encodeURIComponent(id)}?fields=spreadsheetId,properties.title,spreadsheetUrl,sheets.properties(sheetId,title)`);
+    return api('GET', `${BASE}/${encodeURIComponent(id)}?fields=spreadsheetId,properties.title,spreadsheetUrl,sheets(properties(sheetId,title,index),charts(chartId))`);
 }
 
 export async function batchGet(id, ranges) {

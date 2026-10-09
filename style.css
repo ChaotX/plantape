@@ -905,3 +905,20 @@ section + section {
     opacity: 0.3;
     filter: grayscale(1);
 }
+
+.tiny.delete {
+    min-width: 0;
+    padding: 2px 6px;
+    opacity: 0.6;
+}
+
+.tiny.delete:hover {
+    opacity: 1;
+    border-color: var(--red);
+}
+
+button.danger {
+    background: var(--red);
+    border-color: var(--red);
+    color: #fff;
+}

@@ -36,7 +36,18 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   - After each adjustment, Baarda data snooping flags measurements that don't fit the rest and proposes the
     likely correction.
 - **Live sync to Google Sheets:** every point and measurement is appended right away. Changes made offline are
-  queued in the browser and sent once online. You can also write the computed coordinates back into the sheet.
+  queued in the browser and sent once online. The computed coordinates, residuals and a **Plan** tab are written
+  back into the sheet when the garden is opened and shortly after each change (or right away with **Write
+  coordinates to sheet**).
+- **Plan tab and app link:** the first tab of the sheet holds a chart of the computed positions (points with
+  their names, the lines of the plan, the other measurements dashed), so the sheet shows the last computed state
+  on its own. Above it is a link, `…/?sheet=<spreadsheet id>` (also under **Copy app link** in Settings), that
+  opens this garden in PlanTape. After editing measurements in the sheet, click it: the app signs in, recomputes
+  and writes the new coordinates and chart back. Someone who didn't create the sheet is asked to choose it once
+  in the Drive Picker, which gives the app access to it.
+- **Deleting:** 🗑 in the points and measurements tables and in the measuring history. Deleting a point also
+  deletes the measurements that use it. The rows are removed from the sheet too. **Exclude** keeps a
+  measurement but leaves it out of the computation.
 - **Export:** vector **PDF** and **SVG** at true scale (1:20 … 1:2000, A4/A3/A2) with scale bar and title
   block, a coordinates CSV, and a JSON backup.
 - **On the plan:** tap **⌖** and then the point or measured line where you are; after that a plain tap picks what
@@ -117,7 +128,11 @@ Lines are written as two points, `from`–`from_b` and `to`–`to_b`; their orde
 | `angle` | line `from`–`from_b`, line `to`–`to_b` | the angle in degrees by which the first line turns counter-clockwise (seen from above) onto the second, 0 ≤ angle < 180 (180 is stored as 0, −37 as 143) |
 
 Rows typed into the sheet by hand work too; decimal commas (`12,45`) are accepted. Points that are used in
-measurements but missing from `Points` are created automatically.
+measurements but missing from `Points` are created automatically. Rows without an `id` get one when results
+are written back or a row is deleted.
+
+The `Plan` tab is rewritten by the app each time (link, note, chart data in columns A–E, and the chart); don't
+keep your own data there.
 
 ## How it works
 

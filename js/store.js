@@ -7,6 +7,7 @@ import {
 } from './model.js';
 import * as sheets from './sheets-api.js';
 import { HttpError, quoteSheet, columnLetter } from './sheets-api.js';
+import { PLAN_TAB, PLAN_FIRST_ROW, PLAN_COLUMNS, planTable, planChart } from './sheet-plan.js';
 import { storage, uid } from './util.js';
 
 const RECENT_KEY = 'plantape:recent';
@@ -44,6 +45,12 @@ function applyOp(garden, op) {
             if (p) Object.assign(p, op.changes);
             break;
         }
+        case 'deleteMeasurement':
+            garden.measurements = garden.measurements.filter(m => m.id !== op.id);
+            break;
+        case 'deletePoint':
+            garden.points = garden.points.filter(p => p.name !== op.name);
+            break;
         case 'addBlocked':
             garden.blocked.push({ a: op.a, b: op.b });
             break;
@@ -75,8 +82,14 @@ class BaseStore {
         return 0;
     }
 
+    // fn(op) after every change of the garden.
+    onChange(fn) {
+        (this.changeListeners ||= new Set()).add(fn);
+    }
+
     mutate(op) {
         applyOp(this.garden, op);
+        for (const fn of this.changeListeners || []) fn(op);
         return this.persist(op);
     }
 
@@ -95,6 +108,15 @@ class BaseStore {
     // changes: { sketchX, sketchY, category, notes }
     updatePoint(name, changes) {
         return this.mutate({ type: 'updatePoint', name, changes });
+    }
+
+    deleteMeasurement(id) {
+        return this.mutate({ type: 'deleteMeasurement', id });
+    }
+
+    // Only the point itself; the caller deletes the measurements that use it first.
+    deletePoint(name) {
+        return this.mutate({ type: 'deletePoint', name });
     }
 
     addBlocked(a, b) {
@@ -202,7 +224,7 @@ export class GoogleStore extends BaseStore {
 
     async load() {
         try {
-            const meta = await sheets.getSpreadsheet(this.id);
+            const meta = await this.readMeta();
             this.sheetTitle = meta.properties?.title || '';
             if (meta.spreadsheetUrl) this.url = meta.spreadsheetUrl;
             const titles = new Set((meta.sheets || []).map(s => s.properties.title));
@@ -214,6 +236,7 @@ export class GoogleStore extends BaseStore {
                 missing.push({ title, rows });
             }
             await sheets.addTabs(this.id, missing);
+            if (missing.length) this.sheetIds = null; // read again when a row is deleted
             const [points, measurements, settings, blocked] = await sheets.batchGet(this.id, Object.values(TABS).map(quoteSheet));
             this.garden = gardenFromTables({ points, measurements, settings, blocked });
             if (!this.garden.settings.gardenName) this.garden.settings.gardenName = this.sheetTitle;
@@ -230,6 +253,20 @@ export class GoogleStore extends BaseStore {
         this.setSync(this.queue.length ? 'pending' : 'ok');
         this.flush();
         return this.garden;
+    }
+
+    // Spreadsheet metadata; keeps the tab ids (needed to delete rows) and the charts of each tab.
+    async readMeta() {
+        const meta = await sheets.getSpreadsheet(this.id);
+        this.sheetIds = new Map((meta.sheets || []).map(s => [s.properties.title, s.properties.sheetId]));
+        return meta;
+    }
+
+    async deleteRow(tab, row) {
+        if (!this.sheetIds?.has(tab)) await this.readMeta();
+        const sheetId = this.sheetIds.get(tab);
+        if (sheetId === undefined) return;
+        await sheets.batchUpdate(this.id, [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: row - 1, endIndex: row } } }]);
     }
 
     saveCache() {
@@ -314,6 +351,18 @@ export class GoogleStore extends BaseStore {
             case 'updateMeasurement':
                 await this.updateMeasurementRow(op.id, op.changes);
                 break;
+            case 'deleteMeasurement': {
+                await this.ensureIds();
+                if (/^row-\d+$/.test(op.id)) break; // could not be pinned to a row
+                const row = await this.findMeasurementRow(op.id);
+                if (row) await this.deleteRow(TABS.measurements, row);
+                break;
+            }
+            case 'deletePoint': {
+                const row = await this.findPointRow(op.name);
+                if (row) await this.deleteRow(TABS.points, row);
+                break;
+            }
             default:
                 break;
         }
@@ -328,6 +377,43 @@ export class GoogleStore extends BaseStore {
         const [values] = await sheets.batchGet(this.id, [`${quoteSheet(TABS.measurements)}!${letter}:${letter}`]);
         const idx = values.findIndex(row => String(row[0] ?? '') === id);
         return idx >= 0 ? idx + 1 : null;
+    }
+
+    // 1-based row of a point, or null when it is not (or no longer) in the sheet.
+    async findPointRow(name) {
+        const nameCol = this.headers('points').indexOf('name');
+        if (nameCol < 0) return null;
+        const letter = columnLetter(nameCol);
+        const [values] = await sheets.batchGet(this.id, [`${quoteSheet(TABS.points)}!${letter}:${letter}`]);
+        const idx = values.findIndex((row, i) => i > 0 && String(row[0] ?? '').trim() === name);
+        return idx >= 0 ? idx + 1 : null;
+    }
+
+    // Rows typed by hand without an id (or with a duplicate one) are known by their row number ('row-12'),
+    // which deleting a row above them would shift. Gives them real ids in the sheet and renames the in-memory
+    // and queued references. Returns Map old id → new id.
+    async ensureIds() {
+        const synthetic = id => /^row-\d+$/.test(String(id ?? ''));
+        const wanted = new Set([...this.garden.measurements.map(m => m.id), ...this.queue.map(q => q.id)].filter(synthetic));
+        const renamed = new Map();
+        if (!wanted.size) return renamed;
+        const col = columnLetter(await this.ensureColumn('measurements', TABS.measurements, 'id'));
+        const data = [];
+        for (const old of wanted) {
+            const id = uid('m');
+            renamed.set(old, id);
+            data.push({ range: `${quoteSheet(TABS.measurements)}!${col}${old.slice(4)}`, values: [[id]] });
+        }
+        await sheets.batchUpdateValues(this.id, data);
+        for (const m of this.garden.measurements) {
+            if (!renamed.has(m.id)) continue;
+            m.id = renamed.get(m.id);
+            m.needsId = false;
+        }
+        for (const q of this.queue) if (renamed.has(q.id)) q.id = renamed.get(q.id);
+        storage.set(this.queueKey, this.queue);
+        this.saveCache();
+        return renamed;
     }
 
     // Column index of a header in a tab, appending the header cell when the sheet lacks it.
@@ -346,18 +432,14 @@ export class GoogleStore extends BaseStore {
     // Writes changed point fields (sketch position, category, notes) into the point's row.
     async updatePointRow(name, changes) {
         const keyMap = { sketchX: 'sketch_x', sketchY: 'sketch_y', category: 'category', notes: 'notes', visible: 'visible' };
-        const nameCol = this.headers('points').indexOf('name');
-        if (nameCol < 0) return;
-        const letter = columnLetter(nameCol);
-        const [values] = await sheets.batchGet(this.id, [`${quoteSheet(TABS.points)}!${letter}:${letter}`]);
-        const idx = values.findIndex((row, i) => i > 0 && String(row[0] ?? '').trim() === name);
-        if (idx < 0) return; // row was deleted in the sheet meanwhile
+        const row = await this.findPointRow(name);
+        if (!row) return; // row was deleted in the sheet meanwhile
         const record = pointToRecord({ name, ...changes });
         const data = [];
         for (const [field, column] of Object.entries(keyMap)) {
             if (!(field in changes)) continue;
             const col = await this.ensureColumn('points', TABS.points, column);
-            data.push({ range: `${quoteSheet(TABS.points)}!${columnLetter(col)}${idx + 1}`, values: [[record[column]]] });
+            data.push({ range: `${quoteSheet(TABS.points)}!${columnLetter(col)}${row}`, values: [[record[column]]] });
         }
         if (data.length) await sheets.batchUpdateValues(this.id, data);
     }
@@ -381,10 +463,16 @@ export class GoogleStore extends BaseStore {
         if (data.length) await sheets.batchUpdateValues(this.id, data);
     }
 
-    // Writes computed coordinates, residuals and flags back into the sheet (online only).
-    async writeResults(solution, suspects) {
+    // Writes computed coordinates, residuals and flags back into the sheet (online only), and with plan
+    // ({ appUrl, labels }) the Plan tab with a chart of the computed positions. Returns true when
+    // measurement ids changed (rows typed by hand got one), so the caller should recompute.
+    async writeResults(solution, suspects, plan = null) {
         const flushed = await this.flush();
         if (!flushed) throw new Error('Pending changes could not be synced yet');
+        // Rows typed by hand get a real id so they can be referenced later; the solution still knows them
+        // by their row number.
+        const renamed = await this.ensureIds();
+        const solvedId = new Map([...renamed].map(([old, id]) => [id, old]));
         const [pointValues, measurementValues] = await sheets.batchGet(this.id, [quoteSheet(TABS.points), quoteSheet(TABS.measurements)]);
         const data = [];
         const suspectIds = new Set((suspects || []).map(s => s.id));
@@ -399,43 +487,53 @@ export class GoogleStore extends BaseStore {
             return solution.points.get(name) || null;
         }, p => p.placed);
 
-        // Give manually typed rows without id a real id so they can be referenced later.
-        if (!measurementValues[0]) measurementValues[0] = [];
-        const mHeaders = measurementValues[0].map(h => String(h).trim().toLowerCase());
-        let idCol = mHeaders.indexOf('id');
-        if (idCol < 0 && measurementValues.length > 1) {
-            idCol = mHeaders.length;
-            measurementValues[0].push('id');
-            data.push({ range: `${quoteSheet(TABS.measurements)}!${columnLetter(idCol)}1`, values: [['id']] });
-        }
-        const byId = new Map(this.garden.measurements.map(m => [m.id, m]));
-        const rowIds = measurementValues.slice(1).map((row, i) => {
-            let id = String(row[idCol] ?? '').trim();
-            if (!id && idCol >= 0) {
-                const synthetic = byId.get(`row-${i + 2}`);
-                if (synthetic) {
-                    id = uid('m');
-                    synthetic.id = id;
-                    synthetic.needsId = false;
-                    data.push({ range: `${quoteSheet(TABS.measurements)}!${columnLetter(idCol)}${i + 2}`, values: [[id]] });
-                    return { id, old: `row-${i + 2}` };
-                }
-            }
-            return { id, old: id };
-        });
+        const idCol = (measurementValues[0] || []).map(h => String(h).trim().toLowerCase()).indexOf('id');
         const measurementOutputs = {
             residual: r => round(r.residual),
             w: r => (r.w === null ? '' : round(r.w, 2)),
             flag: (r, id) => (suspectIds.has(id) ? 'suspect' : !r.used ? 'unused' : r.r < 0.05 ? 'unchecked' : '')
         };
-        this.addColumns(data, TABS.measurements, measurementValues, measurementOutputs, (row, i) => {
-            const { id, old } = rowIds[i];
-            const res = solution.measurements.get(old) || solution.measurements.get(id);
-            return res ? { res, id: old } : null;
+        this.addColumns(data, TABS.measurements, measurementValues, measurementOutputs, row => {
+            const id = idCol >= 0 ? String(row[idCol] ?? '').trim() : '';
+            const key = solution.measurements.has(id) ? id : solvedId.get(id);
+            return key ? { res: solution.measurements.get(key), id: key } : null;
         }, () => true, true);
 
         if (data.length) await sheets.batchUpdateValues(this.id, data);
         this.saveCache();
+        if (plan) await this.writePlan(solution, plan);
+        return renamed.size > 0;
+    }
+
+    // The Plan tab (first tab of the sheet): a link that opens this garden in the app, and a chart of the
+    // computed positions. The tab is rewritten each time.
+    async writePlan(solution, { appUrl, labels }) {
+        const meta = await this.readMeta();
+        const tab = (meta.sheets || []).find(s => s.properties.title === PLAN_TAB);
+        const requests = (tab?.charts || []).map(c => ({ deleteEmbeddedObject: { objectId: c.chartId } }));
+        let sheetId = tab?.properties.sheetId;
+        if (sheetId === undefined) {
+            const res = await sheets.batchUpdate(this.id, [{ addSheet: { properties: { title: PLAN_TAB, index: 0 } } }]);
+            sheetId = res?.replies?.[0]?.addSheet?.properties?.sheetId;
+        }
+        const table = planTable(solution, this.garden.measurements, labels);
+        const q = quoteSheet(PLAN_TAB);
+        await sheets.clearRange(this.id, `${q}!A1:${columnLetter(PLAN_COLUMNS - 1)}`);
+        await sheets.batchUpdateValues(this.id, [
+            { range: `${q}!A2`, values: [[labels.note]] },
+            { range: `${q}!A${PLAN_FIRST_ROW}`, values: table.rows }
+        ]);
+        // A linked cell rather than a HYPERLINK formula, whose argument separator depends on the sheet's locale.
+        requests.push({
+            updateCells: {
+                start: { sheetId, rowIndex: 0, columnIndex: 0 },
+                rows: [{ values: [{ userEnteredValue: { stringValue: labels.link }, userEnteredFormat: { textFormat: { bold: true, link: { uri: appUrl } } } }] }],
+                fields: 'userEnteredValue,userEnteredFormat.textFormat'
+            }
+        });
+        const chart = planChart(sheetId, table, labels);
+        if (chart) requests.push({ addChart: { chart } });
+        if (requests.length) await sheets.batchUpdate(this.id, requests);
     }
 
     // Fills output columns (adding missing headers at the end) for every data row of a tab.

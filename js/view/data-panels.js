@@ -22,6 +22,11 @@ export class PointsPanel {
                 app.actions.toggleVisible({ point: vis.dataset.name });
                 return;
             }
+            const del = e.target.closest('[data-action="delete"]');
+            if (del) {
+                app.actions.deletePoint(del.dataset.name);
+                return;
+            }
             const row = e.target.closest('[data-point]');
             if (row) app.actions.selectPoint(row.dataset.point);
         });
@@ -35,7 +40,7 @@ export class PointsPanel {
         const rows = [...result.solution.points].sort((a, b) => a[0].localeCompare(b[0]));
         const z = result.solution.is3D;
         this.el.innerHTML = rows.length ? `<div class="table-wrap"><table class="data">
-            <thead><tr><th></th><th>${escapeHtml(t('colName'))}</th><th>x</th><th>y</th>${z ? '<th>z</th>' : ''}<th>σxy</th>${z ? '<th>σz</th>' : ''}<th>${escapeHtml(t('colLinks'))}</th></tr></thead>
+            <thead><tr><th></th><th>${escapeHtml(t('colName'))}</th><th>x</th><th>y</th>${z ? '<th>z</th>' : ''}<th>σxy</th>${z ? '<th>σz</th>' : ''}<th>${escapeHtml(t('colLinks'))}</th><th></th></tr></thead>
             <tbody>${rows.map(([name, p]) => `
                 <tr data-point="${escapeHtml(name)}" class="${name === ui.selected ? 'selected' : ''} status-${p.status}">
                     <td>${eye(isPointShown(byName.get(name)), `data-name="${escapeHtml(name)}"`, 'shownOnPlan', 'hiddenOnPlan')}</td>
@@ -44,6 +49,7 @@ export class PointsPanel {
                     <td class="num">${p.status === 'datum' && !(p.sxy > 0) ? '0' : fmt(p.sxy * 100, 1) + ' cm'}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.status === 'datum' && !(p.sz > 0) ? '0' : fmt(p.sz * 100, 1) + ' cm'}</td>` : ''}`
                     : `<td colspan="${z ? 5 : 3}" class="muted">${escapeHtml(t('notPlaced'))}</td>`}
                     <td class="num">${p.links}${p.status === 'weak' ? ' ⚠' : ''}</td>
+                    <td><button type="button" class="tiny delete" data-action="delete" data-name="${escapeHtml(name)}" title="${escapeHtml(t('delete'))}">🗑</button></td>
                 </tr>`).join('')}</tbody></table></div>
             <p class="muted small">${escapeHtml(t('pointsLegend'))}</p>` : `<p class="muted">${escapeHtml(t('noPoints'))}</p>`;
     }
@@ -58,6 +64,8 @@ export class MeasurementsPanel {
             if (vis) app.actions.toggleVisible({ measurement: vis.dataset.id });
             const btn = e.target.closest('[data-action="toggle"]');
             if (btn) app.actions.toggleMeasurement(btn.dataset.id);
+            const del = e.target.closest('[data-action="delete"]');
+            if (del) app.actions.deleteMeasurement(del.dataset.id);
         });
     }
 
@@ -67,7 +75,7 @@ export class MeasurementsPanel {
         const suspects = new Set((result.suspects || []).map(s => s.id));
         const list = garden.measurements.slice().reverse();
         this.el.innerHTML = list.length ? `<div class="table-wrap"><table class="data">
-            <thead><tr><th></th><th>${escapeHtml(t('colFrom'))}</th><th>${escapeHtml(t('colTo'))}</th><th>d [m]</th><th>v [mm]</th><th>w</th><th></th></tr></thead>
+            <thead><tr><th></th><th>${escapeHtml(t('colFrom'))}</th><th>${escapeHtml(t('colTo'))}</th><th>d [m]</th><th>v [mm]</th><th>w</th><th></th><th></th></tr></thead>
             <tbody>${list.map(m => {
                 const r = result.solution.measurements.get(m.id) || {};
                 const flag = m.status === 'excluded' ? 'excluded' : suspects.has(m.id) ? 'suspect' : r.used && r.w !== null && Math.abs(r.w) > 2 ? 'warn' : '';
@@ -85,6 +93,7 @@ export class MeasurementsPanel {
                     <td class="num">${residual}</td>
                     <td class="num">${r.used ? (r.w === null ? `<span title="${escapeHtml(t('uncheckedHelp'))}">·</span>` : fmt(r.w, 1)) : '–'}</td>
                     <td><button type="button" class="tiny" data-action="toggle" data-id="${escapeHtml(m.id)}">${escapeHtml(t(m.status === 'excluded' ? 'include' : 'exclude'))}</button></td>
+                    <td><button type="button" class="tiny delete" data-action="delete" data-id="${escapeHtml(m.id)}" title="${escapeHtml(t('delete'))}">🗑</button></td>
                 </tr>`;
             }).join('')}</tbody></table></div>
             <p class="muted small">${escapeHtml(t('measurementsLegend'))}</p>` : `<p class="muted">${escapeHtml(t('noMeasurements'))}</p>`;
@@ -115,6 +124,7 @@ export class SettingsPanel {
                 ${google ? `<div class="row wrap">
                     <a class="button" href="${escapeHtml(store.url)}" target="_blank" rel="noopener">${escapeHtml(t('openSheet'))}</a>
                     <button type="button" data-action="writeResults">${escapeHtml(t('writeResults'))}</button>
+                    <button type="button" data-action="copyAppLink">${escapeHtml(t('copyAppLink'))}</button>
                     <button type="button" data-action="reload">${escapeHtml(t('reloadSheet'))}</button>
                 </div><p class="muted small">${escapeHtml(t('writeResultsHelp'))}</p>` : `<p class="muted small">${escapeHtml(t('localHelp'))}</p>`}
             </section>
@@ -214,7 +224,7 @@ export class SettingsPanel {
         if (!btn) return;
         const a = this.app.actions;
         const map = {
-            writeResults: a.writeResults, reload: a.reload, exportPdf: a.exportPdf, exportSvg: a.exportSvg,
+            writeResults: a.writeResults, copyAppLink: a.copyAppLink, reload: a.reload, exportPdf: a.exportPdf, exportSvg: a.exportSvg,
             exportCsv: a.exportCsv, exportJson: a.exportJson, switchGarden: a.switchGarden
         };
         map[btn.dataset.action]?.();

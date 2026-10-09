@@ -8,7 +8,7 @@ import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, i
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
-import { kindOf } from './solver/observations.js';
+import { kindOf, pointsOfMeasurement } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
@@ -198,12 +198,76 @@ function refresh() {
     renderAll();
 }
 
+// ---- Write-back to the sheet --------------------------------------------------------------------
+
+// The app link that opens this garden; it is written into the sheet's Plan tab.
+function appLink(id) {
+    return `${location.origin}${location.pathname}?sheet=${encodeURIComponent(id)}`;
+}
+
+function planOptions() {
+    return {
+        appUrl: appLink(state.store.id),
+        labels: {
+            link: t('sheetAppLink'),
+            note: t('sheetPlanNote', { date: nowStamp() }),
+            title: state.store.title,
+            x: 'x',
+            points: t('chartPoints'),
+            lines: t('chartLines'),
+            helpers: t('chartHelpers')
+        }
+    };
+}
+
+const WRITE_DELAY = 15000;
+let writeTimer = null;
+let writing = null;
+
+// Computed coordinates, residuals and the Plan tab go to the sheet when a garden is opened and shortly after
+// changes, so the sheet always shows the last computed state. Needs a valid token: a sign-in popup can't be
+// opened without a click.
+function scheduleWriteBack(delay = WRITE_DELAY) {
+    clearTimeout(writeTimer);
+    if (state.store?.type === 'google') writeTimer = setTimeout(() => writeBack(), delay);
+}
+
+async function writeBack({ quiet = true } = {}) {
+    clearTimeout(writeTimer);
+    const store = state.store;
+    if (store?.type !== 'google' || !state.result) return;
+    if (writing) {
+        scheduleWriteBack();
+        return;
+    }
+    if (quiet && (!hasValidToken() || !navigator.onLine)) return;
+    writing = (async () => {
+        try {
+            const renamed = await store.writeResults(state.result.solution, state.result.suspects, planOptions());
+            store.writeError = '';
+            if (renamed && state.store === store) refresh();
+            if (!quiet) toast(t('resultsWritten'), 'ok');
+        } catch (error) {
+            const message = errorMessage(error);
+            // An automatic write that keeps failing the same way is reported once.
+            if (!quiet || store.writeError !== message) toast(t('writeFailed', { message }), 'error');
+            store.writeError = message;
+        }
+    })().finally(() => {
+        writing = null;
+    });
+    return writing;
+}
+
 // ---- Garden lifecycle ---------------------------------------------------------------------------
 
-async function openStore(store) {
+// fromLink: opened from the link in the sheet, so say when the sheet has been updated.
+async function openStore(store, { fromLink = false } = {}) {
+    clearTimeout(writeTimer);
     state.store?.dispose?.();
     state.store = store;
     store.onSync(renderSync);
+    store.onChange(() => scheduleWriteBack());
     $('#gardenError').classList.add('hidden');
     showLoading(true);
     try {
@@ -211,9 +275,7 @@ async function openStore(store) {
     } catch (error) {
         state.store = null;
         showLoading(false);
-        const el = $('#gardenError');
-        el.textContent = errorMessage(error);
-        el.classList.remove('hidden');
+        showOpenError(store, error);
         showGardenScreen();
         return;
     } finally {
@@ -230,6 +292,31 @@ async function openStore(store) {
     showScreen('mainScreen');
     refresh();
     planView.fit();
+    if (store.type === 'google' && !store.offlineLoaded) writeBack({ quiet: !fromLink });
+}
+
+// The app sees only spreadsheets the user created with it or picked in the Drive Picker (drive.file scope).
+// A sheet shared by someone else is opened by picking it once, which grants that access.
+function showOpenError(store, error) {
+    const el = $('#gardenError');
+    el.textContent = errorMessage(error);
+    if (store.type === 'google' && (error?.status === 403 || error?.status === 404)) {
+        el.textContent = t('errNoAccessGrant');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'secondary';
+        btn.textContent = t('grantAccess');
+        btn.addEventListener('click', async () => {
+            try {
+                const picked = await pickSpreadsheet({ title: t('pickTitle'), locale: getLanguage(), fileId: store.id });
+                if (picked) await openStore(new GoogleStore(picked.id));
+            } catch (err) {
+                toast(errorMessage(err), 'error');
+            }
+        });
+        el.append(document.createElement('br'), btn);
+    }
+    el.classList.remove('hidden');
 }
 
 function showLoading(on) {
@@ -335,6 +422,18 @@ function submitMeasurement(m, done) {
         keep: () => {
             closeModal();
             commitMeasurement(m, check, done);
+        }
+    });
+}
+
+function confirmDelete(title, text, onConfirm) {
+    openModal(`
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(text)}</p>
+        <div class="row end"><button type="button" data-action="close">${escapeHtml(t('cancel'))}</button><button type="button" class="danger" data-action="confirm">${escapeHtml(t('delete'))}</button></div>`, {
+        confirm: () => {
+            closeModal();
+            onConfirm();
         }
     });
 }
@@ -472,14 +571,47 @@ const actions = {
     async writeResults() {
         showLoading(true);
         try {
-            await state.store.writeResults(state.result.solution, state.result.suspects);
-            toast(t('resultsWritten'), 'ok');
-            refresh(); // rows typed by hand may have received ids
-        } catch (error) {
-            toast(errorMessage(error), 'error');
+            await writeBack({ quiet: false });
         } finally {
             showLoading(false);
         }
+    },
+
+    async copyAppLink() {
+        const link = appLink(state.store.id);
+        try {
+            await navigator.clipboard.writeText(link);
+            toast(t('linkCopied'), 'ok');
+        } catch {
+            toast(link, 'info');
+        }
+    },
+
+    deleteMeasurement(id) {
+        const m = state.garden.measurements.find(x => x.id === id);
+        if (!m) return;
+        confirmDelete(t('deleteMeasurementTitle'), t('deleteMeasurementText', { what: describeMeasurement(m), d: formatValue(m, unit()) }), () => {
+            state.store.deleteMeasurement(id);
+            refresh();
+        });
+    },
+
+    // Deletes a point together with every measurement that uses it (distances, and distances and angles of
+    // lines through it); a datum setting naming it falls back to automatic.
+    deletePoint(name) {
+        const used = state.garden.measurements.filter(m => pointsOfMeasurement(m).includes(name));
+        confirmDelete(t('deletePointTitle', { name }), used.length ? t('deletePointText', { name, n: used.length }) : t('deletePointTextUnused', { name }), () => {
+            for (const m of used) state.store.deleteMeasurement(m.id);
+            state.store.deletePoint(name);
+            const s = state.garden.settings;
+            const datum = ['origin', 'axis', 'side'].filter(key => s[key] === name);
+            for (const key of datum) s[key] = '';
+            if (datum.length) actions.saveSettings();
+            const involves = key => key === name || (isLine(key) && lineEnds(key).includes(name));
+            for (const key of ['station', 'target', 'selected']) if (involves(state.ui[key])) state.ui[key] = '';
+            refresh();
+            toast(t('pointDeleted', { name }), 'info');
+        });
     },
 
     async reload() {
@@ -529,6 +661,8 @@ const actions = {
 
 const app = { state, actions, toast, renderPlan, saveLayers };
 
+let pendingLink = ''; // spreadsheet id from the sheet's app link, opened after signing in
+
 // ---- Wiring -------------------------------------------------------------------------------------
 
 function bindStartAndGardenScreens() {
@@ -536,7 +670,11 @@ function bindStartAndGardenScreens() {
         $('#startError').classList.add('hidden');
         try {
             await requestToken({ prompt: 'consent' });
-            showGardenScreen();
+            const linked = pendingLink;
+            pendingLink = '';
+            $('#linkNotice').classList.add('hidden');
+            if (linked) await openStore(new GoogleStore(linked), { fromLink: true });
+            else showGardenScreen();
         } catch (error) {
             const el = $('#startError');
             el.textContent = errorMessage(error);
@@ -712,6 +850,27 @@ async function boot() {
     if (!isConfigured()) {
         $('#signInButton').disabled = true;
         $('#notConfigured').classList.remove('hidden');
+    }
+
+    // The link in a garden spreadsheet: ?sheet=<spreadsheet id>. It opens that garden, which recomputes it and
+    // writes the results back. The parameter is dropped from the address so a reload keeps the usual flow.
+    const params = new URLSearchParams(location.search);
+    const linked = spreadsheetIdFromUrl(params.get('sheet') || '');
+    if (params.has('sheet')) {
+        params.delete('sheet');
+        const query = params.toString();
+        history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+    }
+    if (linked && isConfigured()) {
+        if (hasValidToken()) {
+            await openStore(new GoogleStore(linked), { fromLink: true });
+            return;
+        }
+        // Signing in needs a click (popup); the sign-in button then opens the linked garden.
+        pendingLink = linked;
+        $('#linkNotice').classList.remove('hidden');
+        showScreen('startScreen');
+        return;
     }
 
     let current = null;

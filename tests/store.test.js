@@ -56,6 +56,15 @@ function trimRows(rows) {
     return out;
 }
 
+// Tab ids: the position of the tab in the book's map, plus 1.
+function sheetIdOf(book, title) {
+    return [...book.sheets.keys()].indexOf(title) + 1;
+}
+
+function titleOf(book, sheetId) {
+    return [...book.sheets.keys()][sheetId - 1];
+}
+
 function reply(obj, status = 200) {
     return { ok: status < 400, status, json: async () => obj };
 }
@@ -83,7 +92,11 @@ globalThis.fetch = async (url, opts = {}) => {
     if (!book) return reply({ error: { message: 'not found' } }, 404);
     const rest = m[2];
     if (method === 'GET' && rest === '') {
-        return reply({ properties: { title: book.title }, spreadsheetUrl: `https://fake/${m[1]}`, sheets: [...book.sheets.keys()].map(title => ({ properties: { title } })) });
+        return reply({
+            properties: { title: book.title },
+            spreadsheetUrl: `https://fake/${m[1]}`,
+            sheets: [...book.sheets.keys()].map(title => ({ properties: { title, sheetId: sheetIdOf(book, title) }, charts: (book.charts || []).filter(c => c.sheetId === sheetIdOf(book, title)).map(c => ({ chartId: c.chartId })) }))
+        });
     }
     if (method === 'GET' && rest === '/values:batchGet') {
         const ranges = u.searchParams.getAll('ranges').map(parseRange);
@@ -121,8 +134,34 @@ globalThis.fetch = async (url, opts = {}) => {
         return reply({});
     }
     if (method === 'POST' && rest === ':batchUpdate') {
-        for (const req of body.requests) if (req.addSheet) book.sheets.set(req.addSheet.properties.title, []);
-        return reply({});
+        const replies = [];
+        book.charts ||= [];
+        for (const req of body.requests) {
+            if (req.addSheet) {
+                book.sheets.set(req.addSheet.properties.title, []);
+                replies.push({ addSheet: { properties: { ...req.addSheet.properties, sheetId: sheetIdOf(book, req.addSheet.properties.title) } } });
+                continue;
+            }
+            if (req.deleteDimension) {
+                const { sheetId, startIndex, endIndex } = req.deleteDimension.range;
+                book.sheets.get(titleOf(book, sheetId)).splice(startIndex, endIndex - startIndex);
+            } else if (req.addChart) {
+                const chartId = book.charts.length + 100;
+                book.charts.push({ chartId, sheetId: req.addChart.chart.position.overlayPosition.anchorCell.sheetId, chart: req.addChart.chart });
+            } else if (req.deleteEmbeddedObject) {
+                book.charts = book.charts.filter(c => c.chartId !== req.deleteEmbeddedObject.objectId);
+            } else if (req.updateCells) {
+                const { sheetId, rowIndex, columnIndex } = req.updateCells.start;
+                const rows = book.sheets.get(titleOf(book, sheetId));
+                req.updateCells.rows.forEach((r, i) => r.values.forEach((cell, j) => {
+                    const row = rows[rowIndex + i] || (rows[rowIndex + i] = []);
+                    row[columnIndex + j] = cell.userEnteredValue?.stringValue;
+                    (book.links ||= {})[`${titleOf(book, sheetId)}!${rowIndex + i}:${columnIndex + j}`] = cell.userEnteredFormat?.textFormat?.link?.uri;
+                }));
+            } else throw new Error(`unhandled request ${Object.keys(req)}`);
+            replies.push({});
+        }
+        return reply({ replies });
     }
     throw new Error(`unhandled ${method} ${path}`);
 };
@@ -326,4 +365,77 @@ test('showing and hiding points and measurements writes the visible column', asy
     assert.equal(garden.points.find(p => p.name === 'B').visible, undefined);
     assert.equal(garden.measurements.find(m => m.id === 'm1').visible, true);
     assert.equal(garden.measurements.find(m => m.id === 'mv').visible, false);
+});
+
+test('deleting a measurement and a point removes their rows', async () => {
+    const store = await seededStore();
+    await store.deleteMeasurement('m2');
+    const ms = sheetRows(store.id, 'Measurements');
+    assert.equal(ms.length, 6);
+    assert.ok(!ms.some(r => r[0] === 'm2'));
+    assert.ok(!store.garden.measurements.some(m => m.id === 'm2'));
+    for (const m of store.garden.measurements.filter(x => x.from === 'D' || x.to === 'D')) await store.deleteMeasurement(m.id);
+    await store.deletePoint('D');
+    assert.deepEqual(sheetRows(store.id, 'Points').slice(1).map(r => r[0]), ['A', 'B', 'C']);
+    const again = await new GoogleStore(store.id).load();
+    assert.deepEqual(again.points.map(p => p.name), ['A', 'B', 'C']);
+    assert.deepEqual(again.measurements.map(m => m.id), ['m0', 'm1']);
+});
+
+test('deletes queued offline are sent later', async () => {
+    const store = await seededStore();
+    offline = true;
+    await store.deleteMeasurement('m0');
+    assert.equal(store.queue.length, 1);
+    assert.ok(sheetRows(store.id, 'Measurements').some(r => r[0] === 'm0'));
+    offline = false;
+    assert.equal(await store.flush(), true);
+    assert.ok(!sheetRows(store.id, 'Measurements').some(r => r[0] === 'm0'));
+});
+
+test('rows typed by hand without id: deleting one does not hit the wrong row later', async () => {
+    const id = 'manual-delete';
+    books.set(id, {
+        title: 'Typed',
+        sheets: new Map([['Measurements', [
+            ['from', 'to', 'distance', 'status'],
+            ['A', 'B', 10, ''],
+            ['A', 'C', 8, ''],
+            ['B', 'C', 6, '']
+        ]]])
+    });
+    const store = new GoogleStore(id);
+    const garden = await store.load();
+    const [ab, , bc] = garden.measurements.map(m => m.id);
+    assert.equal(ab, 'row-2');
+    offline = true; // queue both, so the second is sent after the first shifted the rows
+    await store.deleteMeasurement(ab);
+    await store.updateMeasurement(bc, { status: 'excluded' });
+    offline = false;
+    assert.equal(await store.flush(), true);
+    const rows = sheetRows(id, 'Measurements');
+    const h = rows[0];
+    assert.deepEqual(rows.slice(1).map(r => [r[h.indexOf('from')], r[h.indexOf('to')], r[h.indexOf('status')]]), [['A', 'C', ''], ['B', 'C', 'excluded']]);
+    assert.ok(rows.slice(1).every(r => /^m-/.test(r[h.indexOf('id')])), 'remaining rows got ids');
+    assert.ok(store.garden.measurements.every(m => /^m-/.test(m.id)));
+});
+
+test('write-back adds the Plan tab with the app link and one chart', async () => {
+    const store = await seededStore();
+    store.updateMeasurement('m0', { visible: true });
+    const res = snoop(solverInput(store.garden));
+    const plan = { appUrl: 'https://example.test/plantape/?sheet=x', labels: { link: 'Open', note: 'Note', title: 'Test', x: 'x', points: 'P', lines: 'L', helpers: 'H' } };
+    await store.writeResults(res.solution, res.suspects, plan);
+    await store.writeResults(res.solution, res.suspects, plan);
+    const book = books.get(store.id);
+    const tab = sheetRows(store.id, 'Plan');
+    assert.equal(tab[0][0], 'Open');
+    assert.equal(book.links['Plan!0:0'], plan.appUrl);
+    assert.equal(tab[1][0], 'Note');
+    assert.deepEqual(tab[3], ['x', 'P', 'L', 'H', '']);
+    assert.deepEqual(tab.slice(4, 8).map(r => r[4]), ['A', 'B', 'C', 'D']);
+    assert.equal(book.charts.length, 1, 'the chart is replaced, not added again');
+    const chart = book.charts[0].chart.spec.basicChart;
+    assert.equal(chart.chartType, 'SCATTER');
+    assert.equal(chart.series.length, 3, 'points, the drawn line A–B and helper lines');
 });

@@ -471,7 +471,8 @@ export class MeasurePanel {
                 return `<li class="${cls}"><span>${escapeHtml(describeMeasurement(m))}</span>
                     <span class="num">${escapeHtml(formatValue(m, this.unit))}${r?.used && Number.isFinite(r.residual) ? ` <small>v ${escapeHtml(formatResidual(m, r.residual))}</small>` : ''}</span>
                     <button type="button" class="tiny eye${isMeasurementDrawn(m) ? '' : ' off'}" data-action="visible" data-id="${escapeHtml(m.id)}" title="${escapeHtml(t(isMeasurementDrawn(m) ? 'drawnOnPlan' : 'hiddenOnPlan'))}">👁</button>
-                    <button type="button" class="tiny" data-action="toggle" data-id="${escapeHtml(m.id)}">${escapeHtml(t(m.status === 'excluded' ? 'include' : 'exclude'))}</button></li>`;
+                    <button type="button" class="tiny" data-action="toggle" data-id="${escapeHtml(m.id)}">${escapeHtml(t(m.status === 'excluded' ? 'include' : 'exclude'))}</button>
+                    <button type="button" class="tiny delete" data-action="delete" data-id="${escapeHtml(m.id)}" title="${escapeHtml(t('delete'))}">🗑</button></li>`;
             }).join('')}</ul>`;
     }
 
@@ -595,6 +596,8 @@ export class MeasurePanel {
             this.app.actions.toggleMeasurement(btn.dataset.id);
         } else if (action === 'visible') {
             this.app.actions.toggleVisible({ measurement: btn.dataset.id });
+        } else if (action === 'delete') {
+            this.app.actions.deleteMeasurement(btn.dataset.id);
         }
     }
 
