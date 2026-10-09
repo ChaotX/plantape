@@ -102,10 +102,11 @@ function errorMessage(error) {
 // ---- Computation --------------------------------------------------------------------------------
 
 // prefer: a point just dragged on the plan; its sketch wins the mirror choices of the whole network.
-function recompute(prefer = null) {
+// dropAt: where prefer was dropped (plan frame).
+function recompute(prefer = null, dropAt = null) {
     const garden = state.garden;
     const s = garden.settings;
-    const res = snoop(solverInput(garden, prefer));
+    const res = snoop(solverInput(garden, prefer, dropAt));
     const solution = s.autoExclude ? res.solution : res.initial;
     const keep = datumToKeep(s, solution);
     if (keep) {
@@ -640,10 +641,13 @@ const actions = {
         const positionsBefore = state.positions;
         const before = positionsBefore.get(name);
         state.store.updatePoint(name, toSketch({ x, y }));
-        recompute(name);
+        recompute(name, { x, y });
         const follow = followSketches(positionsBefore, state.positions, state.garden.points, state.garden.measurements, name);
         const now = state.positions.get(name);
         if (now?.placed) follow.set(name, now); // the sketch moves to where the point ended up
+        // Points the readings leave free went where the drag took them (unless they come along with a computed
+        // point they are tied to): their sketches go there too, so they stay.
+        for (const [n, q] of state.positions) if (q.free && !follow.has(n)) follow.set(n, q);
         for (const [n, q] of follow) state.store.updatePoint(n, toSketch(q));
         recompute();
         renderAll();

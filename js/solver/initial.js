@@ -102,9 +102,31 @@ export function sketchOf(point) {
     return point && Number.isFinite(point.sketchX) && Number.isFinite(point.sketchY) ? { x: point.sketchX, y: point.sketchY } : null;
 }
 
-// Similarity from the sketch frame to the solution's plan frame, fitted on the placed points that have a
-// sketch. Used to draw unplaced points at their sketch and to store new sketches in the sketch frame.
+// The sketch → plan similarity the solver pulled the points with ({ a, b, tx, ty, mirror, count }), as a frame
+// { apply, invert, count }: the same mapping the solution used, so a sketch stored through invert comes back
+// exactly where it was put.
+export function similarityFrame({ a, b, tx, ty, mirror, count }) {
+    const flip = q => (mirror ? { x: q.x, y: -q.y } : q);
+    const d = a * a + b * b;
+    return {
+        apply: p => {
+            const s = flip(p);
+            return { x: a * s.x - b * s.y + tx, y: b * s.x + a * s.y + ty };
+        },
+        invert: p => {
+            const qx = p.x - tx;
+            const qy = p.y - ty;
+            return flip({ x: (a * qx + b * qy) / d, y: (a * qy - b * qx) / d });
+        },
+        count
+    };
+}
+
+// Similarity from the sketch frame to the solution's plan frame: the solver's own when it has one, otherwise
+// fitted on the placed points that have a sketch. Used to draw unplaced points at their sketch and to store new
+// sketches in the sketch frame.
 export function sketchFrame(solution, points) {
+    if (solution?.sketchSimilarity && solution.sketchSimilarity.a ** 2 + solution.sketchSimilarity.b ** 2 > 1e-12) return similarityFrame(solution.sketchSimilarity);
     const pairs = [];
     for (const p of points || []) {
         const s = sketchOf(p);

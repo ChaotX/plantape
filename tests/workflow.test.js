@@ -19,8 +19,8 @@ class Session {
         this.recompute();
     }
 
-    recompute(prefer = null) {
-        const res = snoop(solverInput(this.garden, prefer));
+    recompute(prefer = null, dropAt = null) {
+        const res = snoop(solverInput(this.garden, prefer, dropAt));
         this.solution = this.garden.settings.autoExclude ? res.solution : res.initial;
         this.suspects = res.suspects;
         ({ frame: this.frame, positions: this.positions } = layoutPositions(this.solution, this.garden.points, this.garden.measurements));
@@ -48,9 +48,10 @@ class Session {
         };
         const before = this.positions;
         setSketch(name, { x, y });
-        this.recompute(name);
+        this.recompute(name, { x, y });
         const follow = followSketches(before, this.positions, this.garden.points, this.garden.measurements, name);
         if (this.positions.get(name)?.placed) follow.set(name, this.positions.get(name));
+        for (const [n, q] of this.positions) if (q.free && !follow.has(n)) follow.set(n, q);
         for (const [n, q] of follow) setSketch(n, q);
         this.recompute();
     }

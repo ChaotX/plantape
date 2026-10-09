@@ -35,6 +35,8 @@ export const DEFAULT_SOLVER_SETTINGS = {
 const SKETCH_SIGMA = 2; // m
 const SKETCH_SIGMA_REPORT = 1000; // m
 const PIN_SIGMA = 30; // m: the last phase's hold on where the points are (see levenbergMarquardt below)
+// The point just dragged (input.prefer) pulls much harder, so what the readings leave free follows the drag.
+const DRAG_SIGMA = 0.1; // m
 // Plan uncertainty above which a computed point counts as not fixed by the readings (planner.js WEAK_SXY).
 const FREE_SXY = 0.5; // m
 
@@ -69,16 +71,21 @@ function heightPairs(m) {
 }
 
 // Start positions from the sketch for points with readings that the placement could not fix (they wait for
-// each other, or the readings leave them free), and the sketch anchors: [{ name, s }] with s the sketch in the
-// orientation of the placed frame, plus the similarity { a, b, tx, ty } mapping it there. Adds the started
-// points to placed and order. Returns null when fewer than two placed points have a sketch.
-function startFromSketch(placed, order, usable, points, settings) {
+// each other, or the readings leave them free), and the sketch anchors: [{ name, at }] with at the sketch mapped
+// into the plan, plus that mapping { a, b, tx, ty } (with mirror). The mapping is fitted on the placed points
+// only, which the readings fix, and then kept: points the readings leave free cannot shift it, so they stay
+// put when something unrelated changes. Adds the started
+// points to placed and order. Returns null when fewer than two placed points have a sketch. The point just
+// dragged (prefer) is no anchor: it gets a fixed target (drag), so its strong pull cannot bend the similarity:
+// where it was dropped (dropAt, plan frame) or else its sketch.
+function startFromSketch(placed, order, usable, points, settings, prefer = null, dropAt = null) {
     const sketches = new Map();
     for (const p of points) {
         const sk = sketchOf(p);
         if (sk) sketches.set(p.name, sk);
     }
-    const pairs = [...placed].filter(([n]) => sketches.has(n)).map(([n, w]) => ({ s: sketches.get(n), w }));
+    let pairs = [...placed].filter(([n]) => sketches.has(n)).map(([n, w]) => ({ n, s: sketches.get(n), w }));
+    if (pairs.filter(p => p.n !== prefer).length >= 2) pairs = pairs.filter(p => p.n !== prefer);
     if (pairs.length < 2) return null;
     // The placed frame may be a mirror image of the sketch (side point, "mirror the drawing").
     const flipY = q => ({ x: q.x, y: -q.y });
@@ -95,8 +102,9 @@ function startFromSketch(placed, order, usable, points, settings) {
     }
     const t = T.apply({ x: 0, y: 0 });
     const e = T.apply({ x: 1, y: 0 });
-    const anchors = [...placed.keys()].filter(n => sketches.has(n)).map(name => ({ name, s: oriented(sketches.get(name)) }));
-    return { anchors, sim: { a: e.x - t.x, b: e.y - t.y, tx: t.x, ty: t.y } };
+    const anchors = [...placed.keys()].filter(n => sketches.has(n) && n !== prefer).map(name => ({ name, at: T.apply(oriented(sketches.get(name))) }));
+    const drag = prefer && placed.has(prefer) && sketches.has(prefer) ? { name: prefer, at: dropAt || T.apply(oriented(sketches.get(prefer))) } : null;
+    return { anchors, drag, mirror, sim: { a: e.x - t.x, b: e.y - t.y, tx: t.x, ty: t.y } };
 }
 
 // input: { prefer?: name of a point just dragged (its sketch wins mirror choices), points: [{name, sketchX?, sketchY?}], measurements: [{id, kind, from, fromB, fromH, to, toB, toH,
@@ -114,7 +122,7 @@ export function solveNetwork(input, options = {}) {
     if (settings.flip) for (const p of placed.values()) p.y = -p.y;
 
     const order = [...init.order];
-    const sketched = startFromSketch(placed, order, usable, input.points || [], settings);
+    const sketched = startFromSketch(placed, order, usable, input.points || [], settings, input.prefer || null, input.dropAt || null);
 
     const used = usable.filter(m => pointsOfMeasurement(m).every(n => placed.has(n)));
     const hasDh = m => kindOf(m) === 'distance' && Math.abs((m.toH || 0) - (m.fromH || 0)) > 1e-9;
@@ -129,33 +137,26 @@ export function solveNetwork(input, options = {}) {
         else index.set(name, [u++, u++, u++]);
     }
     // The sketch similarity (a, b, tx, ty) follows the point unknowns; it exists only with sketch anchors.
-    const simAt = u;
-    const nu = sketched ? u + 4 : u; // all unknowns
+    const nu = u; // all unknowns
     const x = new Float64Array(nu);
     for (const [name, idx] of index) {
         const p = placed.get(name);
         if (idx[0] >= 0) x[idx[0]] = p.x;
         if (idx[1] >= 0) x[idx[1]] = p.y;
     }
-    if (sketched) x.set([sketched.sim.a, sketched.sim.b, sketched.sim.tx, sketched.sim.ty], simAt);
-    // Pull towards the sketch: x − (a·sx − b·sy + tx) ≈ 0 and y − (b·sx + a·sy + ty) ≈ 0 for every anchor.
-    const pulls = sketched ? sketched.anchors.map(({ name, s: sk }) => ({ idx: index.get(name), s: sk })) : [];
+    // Pull towards the sketch mapped into the plan, for every anchor.
+    const pulls = sketched ? sketched.anchors.map(({ name, at }) => ({ idx: index.get(name), at })) : [];
+    // The dragged point: pulled hard towards where it was dropped.
+    const drag = sketched?.drag ? { idx: index.get(sketched.drag.name), at: sketched.drag.at, f: (SKETCH_SIGMA / DRAG_SIGMA) ** 2 } : null;
+    const dragRows = vec => (drag ? [0, 1].filter(k => drag.idx[k] >= 0).map(k => ({ r: (k ? drag.at.y : drag.at.x) - vec[drag.idx[k]], ids: [drag.idx[k]], vals: [1], f: drag.f })) : []);
     let pullWeight = 1 / (SKETCH_SIGMA * SKETCH_SIGMA);
     // Instead of the sketch, the last phase pins every plan unknown (and the similarity) lightly to where it is.
     let pins = null;
     const pinIds = [];
     for (const idx of index.values()) for (const k of [0, 1]) if (idx[k] >= 0) pinIds.push(idx[k]);
-    if (sketched) pinIds.push(simAt, simAt + 1, simAt + 2, simAt + 3);
-    const pullRows = vec => (pins ? pinIds.map(i => ({ r: pins[i] - vec[i], ids: [i], vals: [1] })) : pulls.flatMap(({ idx, s: sk }) => {
-        const [a, b, tx, ty] = vec.subarray(simAt, simAt + 4);
-        const px = idx[0] >= 0 ? vec[idx[0]] : 0;
-        const py = idx[1] >= 0 ? vec[idx[1]] : 0;
-        // residual = 0 − computed; partials of computed
-        return [
-            { r: a * sk.x - b * sk.y + tx - px, ids: [idx[0], simAt, simAt + 1, simAt + 2], vals: [1, -sk.x, sk.y, -1] },
-            { r: b * sk.x + a * sk.y + ty - py, ids: [idx[1], simAt, simAt + 1, simAt + 3], vals: [1, -sk.y, -sk.x, -1] }
-        ];
-    }));
+    const pullRows = vec => (pins ? pinIds.map(i => ({ r: pins[i] - vec[i], ids: [i], vals: [1], f: 1 })) : [...dragRows(vec), ...pulls.flatMap(({ idx, at }) => [0, 1]
+        .filter(k => idx[k] >= 0)
+        .map(k => ({ r: (k ? at.y : at.x) - vec[idx[k]], ids: [idx[k]], vals: [1], f: 1 })))]);
 
     const coord = (vec, idx, k) => (idx[k] >= 0 ? vec[idx[k]] : 0);
     const pointAt = vec => name => {
@@ -256,7 +257,7 @@ export function solveNetwork(input, options = {}) {
             const r = observe(o.m, at).residual;
             c += o.weight * r * r;
         }
-        for (const row of pullRows(vec)) c += pullWeight * row.r * row.r;
+        for (const row of pullRows(vec)) c += pullWeight * row.f * row.r * row.r;
         for (const s of smooth) c += s.weight * (zOf(vec, s.zb) - zOf(vec, s.za)) ** 2;
         return c;
     }
@@ -267,16 +268,16 @@ export function solveNetwork(input, options = {}) {
     // Only the height part, and only when heights are measured at all: elsewhere it can make the equations
     // indefinite where the readings leave points free, and the solve then crawls instead of converging.
     function normalEquations(vec, newton = false) {
-        const u = nu; // the point unknowns and the sketch similarity
         const N = new Float64Array(u * u);
         const g = new Float64Array(u);
         const diagGN = new Float64Array(u);
-        for (const { r, ids, vals } of pullRows(vec)) {
+        for (const { r, ids, vals, f } of pullRows(vec)) {
+            const w = pullWeight * f;
             for (let p = 0; p < ids.length; p++) {
                 if (ids[p] < 0) continue;
-                g[ids[p]] += pullWeight * vals[p] * r;
-                diagGN[ids[p]] += pullWeight * vals[p] * vals[p];
-                for (let q = 0; q < ids.length; q++) if (ids[q] >= 0) N[ids[p] * u + ids[q]] += pullWeight * vals[p] * vals[q];
+                g[ids[p]] += w * vals[p] * r;
+                diagGN[ids[p]] += w * vals[p] * vals[p];
+                for (let q = 0; q < ids.length; q++) if (ids[q] >= 0) N[ids[p] * u + ids[q]] += w * vals[p] * vals[q];
             }
         }
         for (const o of obs) {
@@ -398,7 +399,9 @@ export function solveNetwork(input, options = {}) {
         for (let i = 0; i < u; i++) Q.set(full.subarray(i * nu, i * nu + u), i * u);
     }
 
-    const solution = { index, x, Q, u, settings, is3D, datum: { origin: init.origin, axis: init.axis, side: settings.side } };
+    // The mapping the points were pulled with: sketch → plan (similarityFrame in initial.js turns it into a frame).
+    const sketchSimilarity = sketched ? { ...sketched.sim, mirror: sketched.mirror, count: sketched.anchors.length } : null;
+    const solution = { index, x, Q, u, settings, is3D, sketchSimilarity, datum: { origin: init.origin, axis: init.axis, side: settings.side } };
 
     // Per-measurement statistics: residual, redundancy number and Baarda's standardized residual.
     // Residuals, computed values and σ are reported in display units (metres, or degrees for angles).

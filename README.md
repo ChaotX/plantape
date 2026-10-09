@@ -199,6 +199,10 @@ keep your own data there.
   exact, then pinned (σ 30 m) where that left the points, so the readings are met exactly and the sketch
   never counts as a reading that disagrees. Uncertainties are computed with the pull made negligible, so such
   a point shows as not fixed: a "?" arrow along the direction it is free in, "?" in the points table.
+  The sketch → plan mapping is fitted on the points the readings fix and kept fixed during the solve, so free
+  points don't shift when something unrelated changes. Dragging a point pulls it hard (σ 0.1 m) towards where
+  it is dropped: what the readings leave free follows (a free house swings as a whole around the corner it is
+  tied to), and the free points' sketches are updated so they stay there.
   - Heights are then initialised from the height-offset measurements.
 - **Adjustment.**
   - Levenberg–Marquardt with the full Newton curvature of the distance function. Without it, convergence
