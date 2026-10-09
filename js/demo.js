@@ -96,6 +96,15 @@ export function demoGarden(name) {
     add({ kind: 'angle', from: 'House NE', fromB: 'House SE', to: 'House SE', toB: 'House SW', distance: 90 });
     distance('House NW', 'House SW');
 
+    // What the plan shows: every point, and the house outline and the west fence as drawn lines; all other
+    // measurements are helper lines.
+    const drawn = [['House NW', 'House NE'], ['House NE', 'House SE'], ['House SE', 'House SW'], ['House NW', 'House SW'],
+        ['Fence W1', 'Fence W3'], ['Fence W1', 'Fence W2']];
+    for (const p of garden.points) p.visible = true;
+    for (const m of garden.measurements) {
+        m.visible = !m.kind && !m.fromH && !m.toH && drawn.some(([a, b]) => (m.from === a && m.to === b) || (m.from === b && m.to === a));
+    }
+
     // One mistyped distance: last two digits swapped.
     const victim = garden.measurements.find(m => m.from === 'Apple' && m.to === 'Walnut' && m.toH === 0) || garden.measurements[5];
     const s = victim.distance.toFixed(2);

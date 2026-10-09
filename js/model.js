@@ -11,8 +11,8 @@ export const TABS = {
 };
 
 export const HEADERS = {
-    points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status', 'sketch_x', 'sketch_y'],
-    measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note', 'kind', 'from_b', 'to_b'],
+    points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status', 'sketch_x', 'sketch_y', 'visible'],
+    measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note', 'kind', 'from_b', 'to_b', 'visible'],
     settings: ['key', 'value'],
     blocked: ['from', 'to', 'note']
 };
@@ -26,6 +26,8 @@ export const DEFAULT_SETTINGS = {
     sigmaRel: 0.002,
     lineSigma: 0.01,
     angleSigma: 1,
+    newPointsVisible: false,
+    newMeasurementsVisible: false,
     heights: [0, 1, 2],
     origin: '',
     axis: '',
@@ -73,8 +75,28 @@ export function recordToRow(headers, record) {
 
 const round2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : '');
 
+// Shown on the plan? A point without the flag (gardens from before it existed) is shown; a measurement
+// without it is a helper line. A measurement marked visible is a line of the plan itself (a wall, a fence…).
+export function isPointShown(p) {
+    return p?.visible !== false;
+}
+
+export function isMeasurementDrawn(m) {
+    return m?.visible === true;
+}
+
+const flagCell = v => (v === true ? true : v === false ? false : '');
+
+function parseFlag(value) {
+    if (value === true || value === false) return value;
+    const s = String(value ?? '').trim().toLowerCase();
+    if (/^(true|yes|1|igen|x)$/.test(s)) return true;
+    if (/^(false|no|0|nem)$/.test(s)) return false;
+    return undefined;
+}
+
 export function pointToRecord(p) {
-    return { name: p.name, category: p.category || '', notes: p.notes || '', sketch_x: round2(p.sketchX), sketch_y: round2(p.sketchY) };
+    return { name: p.name, category: p.category || '', notes: p.notes || '', sketch_x: round2(p.sketchX), sketch_y: round2(p.sketchY), visible: flagCell(p.visible) };
 }
 
 // Sheet record of a measurement. Distances keep the original columns only (kind, from_b, to_b stay
@@ -92,6 +114,7 @@ export function measurementToRecord(m) {
         distance: m.distance,
         status: m.status || 'active',
         note: m.note || '',
+        visible: flagCell(m.visible),
         kind: dist ? '' : kind,
         from_b: dist ? '' : m.fromB,
         to_b: kind === 'angle' ? m.toB : ''
@@ -148,6 +171,8 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
         const sx = signedNum(record.sketch_x);
         const sy = signedNum(record.sketch_y);
         if (Number.isFinite(sx) && Number.isFinite(sy)) Object.assign(point, { sketchX: sx, sketchY: sy });
+        const pv = parseFlag(record.visible);
+        if (pv !== undefined) point.visible = pv;
         garden.points.push(point);
     }
 
@@ -196,6 +221,8 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
             status,
             note: String(record.note ?? '')
         };
+        const mv = parseFlag(record.visible);
+        if (mv !== undefined) m.visible = mv;
         if (kind !== 'distance') Object.assign(m, { kind, fromB });
         if (kind === 'angle') m.toB = toB;
         garden.measurements.push(m);

@@ -4,7 +4,7 @@ import { t, setLanguage, getLanguage, applyTranslations, LANGUAGES } from './i18
 import { isConfigured, hasValidToken, requestToken, signOut } from './google-auth.js';
 import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
-import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES } from './model.js';
+import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
@@ -22,7 +22,7 @@ const unit = () => (state.garden?.settings.entryUnit === 'm' ? 'm' : 'cm');
 
 const $ = sel => document.querySelector(sel);
 
-const DEFAULT_LAYERS = { lines: true, ellipses: true, labels: true, heights: true, hints: true, colorBy: 'category', ellipseScale: 'auto' };
+const DEFAULT_LAYERS = { lines: true, hiddenLines: true, hiddenPoints: true, ellipses: true, labels: true, heights: true, hints: true, colorBy: 'category', ellipseScale: 'auto' };
 const saved = storage.get('plantape:view', {});
 
 const state = {
@@ -43,6 +43,7 @@ const state = {
         selected: '',
         onlyReachable: true,
         layers: { ...DEFAULT_LAYERS, ...(saved.layers || {}) },
+        selectOnce: saved.selectOnce !== false, // the select tool switches itself off after choosing where I am
         export: { paper: 'A4', orientation: 'landscape', scale: 'fit', ...(saved.export || {}) }
     }
 };
@@ -86,7 +87,7 @@ function openModal(html, handlers = {}) {
 }
 
 function saveLayers() {
-    storage.set('plantape:view', { layers: state.ui.layers, export: state.ui.export });
+    storage.set('plantape:view', { layers: state.ui.layers, export: state.ui.export, selectOnce: state.ui.selectOnce });
 }
 
 function errorMessage(error) {
@@ -261,6 +262,7 @@ function newPointDialog(initialName, onCreated, sketch = null) {
         <div class="sub-label">${escapeHtml(t('category'))}</div>
         <div class="chips">${CATEGORIES.map(c => `<button type="button" class="chip${c === category ? ' active' : ''}" data-action="category" data-value="${c}"><span class="dot" style="background:${CATEGORY_COLORS[c]}"></span>${escapeHtml(t(`cat_${c}`))}</button>`).join('')}</div>
         <label class="field">${escapeHtml(t('pointNotes'))}<input id="pointNotesInput" type="text"></label>
+        <label class="check"><input id="pointVisibleInput" type="checkbox"${state.garden.settings.newPointsVisible ? ' checked' : ''}> ${escapeHtml(t('showOnPlan'))}</label>
         <p id="pointError" class="error hidden"></p>
         <div class="row end"><button type="button" data-action="close">${escapeHtml(t('cancel'))}</button><button type="button" class="primary" data-action="create">${escapeHtml(t('create'))}</button></div>`, {
         category: btn => {
@@ -280,7 +282,7 @@ function newPointDialog(initialName, onCreated, sketch = null) {
                 err.classList.remove('hidden');
                 return;
             }
-            const point = { name, category, notes: card.querySelector('#pointNotesInput').value.trim() };
+            const point = { name, category, notes: card.querySelector('#pointNotesInput').value.trim(), visible: card.querySelector('#pointVisibleInput').checked };
             Object.assign(point, { sketchX: Math.round(sketch.x * 100) / 100, sketchY: Math.round(sketch.y * 100) / 100 });
             state.store.addPoint(point);
             closeModal();
@@ -399,28 +401,45 @@ const actions = {
     },
 
     // A point or a measured line tapped on the plan: picks "from" / "to" while measuring.
-    select(sel) {
-        if (sel.line) {
+    // With the select tool (station = true) the tap says where I am; otherwise it picks what to measure to.
+    select(sel, station = false) {
+        const key = sel.line ? lineKey(...sel.line) : sel.point;
+        if (!station && !sel.line && state.ui.tab !== 'measure') {
+            actions.selectPoint(sel.point);
+            return;
+        }
+        if (state.ui.tab !== 'measure') {
             state.ui.tab = 'measure';
-            panels.measure.select(lineKey(...sel.line));
-            renderPlan();
-            renderTabs();
-            return;
+            panels.measure.render();
         }
-        if (state.ui.tab === 'measure') {
-            panels.measure.select(sel.point);
-            renderPlan();
-            return;
-        }
-        actions.selectPoint(sel.point);
+        if (station) {
+            panels.measure.selectStation(key);
+            if (state.ui.selectOnce) actions.setTool('pan', { quiet: true });
+        } else panels.measure.selectTarget(key);
+        renderPlan();
+        renderTabs();
     },
 
-    setTool(tool) {
+    // Shown on the plan or not: { point: name } or { measurement: id }.
+    toggleVisible(item) {
+        if (item.point) {
+            const p = state.garden.points.find(x => x.name === item.point);
+            if (p) state.store.updatePoint(p.name, { visible: !isPointShown(p) });
+        } else {
+            const m = state.garden.measurements.find(x => x.id === item.measurement);
+            if (m) state.store.updateMeasurement(m.id, { visible: !isMeasurementDrawn(m) });
+        }
+        refresh();
+    },
+
+    setTool(tool, { quiet = false } = {}) {
         state.ui.tool = state.ui.tool === tool ? 'pan' : tool;
         planView.setMode(state.ui.tool);
+        $('#selectButton').classList.toggle('active', state.ui.tool === 'select');
         $('#addPointButton').classList.toggle('active', state.ui.tool === 'add');
         $('#moveButton').classList.toggle('active', state.ui.tool === 'move');
-        if (state.ui.tool !== 'pan') toast(t(state.ui.tool === 'add' ? 'toolAddHelp' : 'toolMoveHelp'), 'info');
+        const help = { select: 'toolSelectHelp', add: 'toolAddHelp', move: 'toolMoveHelp' }[state.ui.tool];
+        if (help && !quiet) toast(t(help), 'info');
     },
 
     selectPoint(name) {
@@ -604,7 +623,7 @@ function bindStartAndGardenScreens() {
 
 function bindMainScreen() {
     planView = new PlanView($('#plan'), {
-        onSelect: sel => actions.select(sel),
+        onSelect: (sel, station) => actions.select(sel, station),
         onAdd: (x, y) => newPointDialog('', null, state.frame.invert({ x, y })),
         onMove: (name, x, y) => actions.movePoint(name, x, y)
     });
@@ -622,10 +641,9 @@ function bindMainScreen() {
         renderTabs();
     });
     $('#fitButton').addEventListener('click', () => planView.fit());
+    $('#selectButton').addEventListener('click', () => actions.setTool('select'));
     $('#addPointButton').addEventListener('click', () => actions.setTool('add'));
     $('#moveButton').addEventListener('click', () => actions.setTool('move'));
-    $('#zoomInButton').addEventListener('click', () => planView.zoomBy(1.4));
-    $('#zoomOutButton').addEventListener('click', () => planView.zoomBy(1 / 1.4));
     $('#layersButton').addEventListener('click', () => {
         renderLayersMenu();
         $('#layersMenu').classList.toggle('hidden');
@@ -663,7 +681,7 @@ function renderLayersMenu() {
     const L = state.ui.layers;
     const check = key => `<label class="check"><input type="checkbox" data-layer="${key}"${L[key] ? ' checked' : ''}> ${escapeHtml(t(`layer_${key}`))}</label>`;
     $('#layersMenu').innerHTML = `
-        ${['lines', 'ellipses', 'labels', 'heights', 'hints', 'grid'].map(k => (k === 'grid' ? `<label class="check"><input type="checkbox" data-layer="grid"${L.grid !== false ? ' checked' : ''}> ${escapeHtml(t('layer_grid'))}</label>` : check(k))).join('')}
+        ${['lines', 'hiddenLines', 'hiddenPoints', 'ellipses', 'labels', 'heights', 'hints', 'grid'].map(k => (k === 'grid' ? `<label class="check"><input type="checkbox" data-layer="grid"${L.grid !== false ? ' checked' : ''}> ${escapeHtml(t('layer_grid'))}</label>` : check(k))).join('')}
         <label class="field compact">${escapeHtml(t('colorBy'))}<select data-layer="colorBy">
             <option value="category"${L.colorBy === 'category' ? ' selected' : ''}>${escapeHtml(t('colorByCategory'))}</option>
             <option value="height"${L.colorBy === 'height' ? ' selected' : ''}>${escapeHtml(t('colorByHeight'))}</option></select></label>

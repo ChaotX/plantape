@@ -39,6 +39,14 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   queued in the browser and sent once online. You can also write the computed coordinates back into the sheet.
 - **Export:** vector **PDF** and **SVG** at true scale (1:20 … 1:2000, A4/A3/A2) with scale bar and title
   block, a coordinates CSV, and a JSON backup.
+- **On the plan:** tap **⌖** and then the point or measured line where you are; after that a plain tap picks what
+  you measure to (a setting decides whether ⌖ switches itself off after one pick). **⤢** shows the whole garden.
+  Zoom with the mouse wheel, two fingers, or Google Maps style: double-tap to zoom in, or double-tap and drag
+  down / up to zoom in / out.
+- **What the plan shows:** each point and measurement can be shown on the plan or hidden (👁 in the tables and
+  in the measuring history; new ones are hidden by default, which can be changed in Settings). Measurements
+  shown on the plan are its drawn lines (walls, fences…), the others are helper lines. The ☰ menu on the plan
+  switches drawn lines, helper lines and hidden points on and off separately; exports follow the same switches.
 - English and Hungarian UI.
 
 ## Running locally
@@ -95,8 +103,8 @@ added. Columns are found by their header name (case-insensitive), so you can reo
 
 | Tab | Columns | Notes |
 |---|---|---|
-| `Points` | `name`, `category`, `notes`, `x`, `y`, `z`, `sigma_xy`, `sigma_z`, `links`, `status`, `sketch_x`, `sketch_y` | `x` … `status` are filled by **Write coordinates to sheet**. `sketch_x` / `sketch_y`: the rough position tapped on the plan (only used to choose between mirror solutions). |
-| `Measurements` | `id`, `timestamp`, `from`, `from_h`, `to`, `to_h`, `distance`, `status`, `residual`, `w`, `flag`, `note`, `kind`, `from_b`, `to_b` | `from_h` / `to_h`: height of the tape above the ground in metres (default 0). Set `status` to `excluded` to ignore a row. `kind` is empty for a distance; see below for `offset` and `angle`. |
+| `Points` | `name`, `category`, `notes`, `x`, `y`, `z`, `sigma_xy`, `sigma_z`, `links`, `status`, `sketch_x`, `sketch_y`, `visible` | `x` … `status` are filled by **Write coordinates to sheet**. `sketch_x` / `sketch_y`: the rough position tapped on the plan (only used to choose between mirror solutions). `visible`: TRUE / FALSE, shown on the plan (empty = shown). |
+| `Measurements` | `id`, `timestamp`, `from`, `from_h`, `to`, `to_h`, `distance`, `status`, `residual`, `w`, `flag`, `note`, `kind`, `from_b`, `to_b`, `visible` | `from_h` / `to_h`: height of the tape above the ground in metres (default 0). Set `status` to `excluded` to ignore a row. `kind` is empty for a distance; see below for `offset` and `angle`. `visible`: TRUE draws the measurement as a line of the plan (empty = helper line). |
 | `Settings` | `key`, `value` | Garden name, tape length, accuracy, datum points… |
 | `Blocked` | `from`, `to`, `note` | Pairs that can't be measured (obstructed); they are not suggested. |
 

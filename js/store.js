@@ -291,11 +291,13 @@ export class GoogleStore extends BaseStore {
                     await this.ensureColumn('points', TABS.points, 'sketch_x');
                     await this.ensureColumn('points', TABS.points, 'sketch_y');
                 }
+                if (typeof op.point.visible === 'boolean') await this.ensureColumn('points', TABS.points, 'visible');
                 await sheets.appendRows(this.id, TABS.points, [recordToRow(this.headers('points'), pointToRecord(op.point))]);
                 break;
             case 'addMeasurement': {
                 const record = measurementToRecord(op.measurement);
                 if (record.kind) for (const column of ['kind', 'from_b', 'to_b']) await this.ensureColumn('measurements', TABS.measurements, column);
+                if (record.visible !== '') await this.ensureColumn('measurements', TABS.measurements, 'visible');
                 await sheets.appendRows(this.id, TABS.measurements, [recordToRow(this.headers('measurements'), record)]);
                 break;
             }
@@ -343,7 +345,7 @@ export class GoogleStore extends BaseStore {
 
     // Writes changed point fields (sketch position, category, notes) into the point's row.
     async updatePointRow(name, changes) {
-        const keyMap = { sketchX: 'sketch_x', sketchY: 'sketch_y', category: 'category', notes: 'notes' };
+        const keyMap = { sketchX: 'sketch_x', sketchY: 'sketch_y', category: 'category', notes: 'notes', visible: 'visible' };
         const nameCol = this.headers('points').indexOf('name');
         if (nameCol < 0) return;
         const letter = columnLetter(nameCol);
@@ -365,9 +367,10 @@ export class GoogleStore extends BaseStore {
         if (!row) return; // row was deleted in the sheet meanwhile
         if ('status' in changes) await this.ensureColumn('measurements', TABS.measurements, 'status');
         if ('note' in changes) await this.ensureColumn('measurements', TABS.measurements, 'note');
+        if ('visible' in changes) await this.ensureColumn('measurements', TABS.measurements, 'visible');
         const headers = this.headers('measurements');
         const record = measurementToRecord({ ...changes, id });
-        const keyMap = { distance: 'distance', status: 'status', note: 'note', fromH: 'from_h', toH: 'to_h' };
+        const keyMap = { distance: 'distance', status: 'status', note: 'note', fromH: 'from_h', toH: 'to_h', visible: 'visible' };
         const data = [];
         for (const [field, column] of Object.entries(keyMap)) {
             if (!(field in changes)) continue;

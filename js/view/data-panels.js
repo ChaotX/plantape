@@ -6,12 +6,22 @@ import { CATEGORY_COLORS } from './plan-view.js';
 import { PAPERS, SCALES } from '../export.js';
 import { kindOf } from '../solver/observations.js';
 import { lineLabel } from './describe.js';
+import { isPointShown, isMeasurementDrawn } from '../model.js';
+
+// Show / hide on the plan.
+const eye = (shown, attrs, onTitle, offTitle) =>
+    `<button type="button" class="tiny eye${shown ? '' : ' off'}" data-action="visible" ${attrs} title="${escapeHtml(t(shown ? onTitle : offTitle))}">👁</button>`;
 
 export class PointsPanel {
     constructor(el, app) {
         this.el = el;
         this.app = app;
         el.addEventListener('click', e => {
+            const vis = e.target.closest('[data-action="visible"]');
+            if (vis) {
+                app.actions.toggleVisible({ point: vis.dataset.name });
+                return;
+            }
             const row = e.target.closest('[data-point]');
             if (row) app.actions.selectPoint(row.dataset.point);
         });
@@ -21,12 +31,14 @@ export class PointsPanel {
         const { garden, result, ui } = this.app.state;
         if (!garden || !result) return;
         const cats = new Map(garden.points.map(p => [p.name, p.category]));
+        const byName = new Map(garden.points.map(p => [p.name, p]));
         const rows = [...result.solution.points].sort((a, b) => a[0].localeCompare(b[0]));
         const z = result.solution.is3D;
         this.el.innerHTML = rows.length ? `<div class="table-wrap"><table class="data">
-            <thead><tr><th>${escapeHtml(t('colName'))}</th><th>x</th><th>y</th>${z ? '<th>z</th>' : ''}<th>σxy</th>${z ? '<th>σz</th>' : ''}<th>${escapeHtml(t('colLinks'))}</th></tr></thead>
+            <thead><tr><th></th><th>${escapeHtml(t('colName'))}</th><th>x</th><th>y</th>${z ? '<th>z</th>' : ''}<th>σxy</th>${z ? '<th>σz</th>' : ''}<th>${escapeHtml(t('colLinks'))}</th></tr></thead>
             <tbody>${rows.map(([name, p]) => `
                 <tr data-point="${escapeHtml(name)}" class="${name === ui.selected ? 'selected' : ''} status-${p.status}">
+                    <td>${eye(isPointShown(byName.get(name)), `data-name="${escapeHtml(name)}"`, 'shownOnPlan', 'hiddenOnPlan')}</td>
                     <td><span class="dot" style="background:${CATEGORY_COLORS[cats.get(name)] || CATEGORY_COLORS.other}"></span>${escapeHtml(name)}${p.status === 'datum' ? ' <small>◆</small>' : ''}</td>
                     ${p.placed ? `<td class="num">${fmt(p.x)}</td><td class="num">${fmt(p.y)}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.zMeasured ? '' : '~'}${fmt(p.z)}</td>` : ''}
                     <td class="num">${p.status === 'datum' && !(p.sxy > 0) ? '0' : fmt(p.sxy * 100, 1) + ' cm'}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.status === 'datum' && !(p.sz > 0) ? '0' : fmt(p.sz * 100, 1) + ' cm'}</td>` : ''}`
@@ -42,6 +54,8 @@ export class MeasurementsPanel {
         this.el = el;
         this.app = app;
         el.addEventListener('click', e => {
+            const vis = e.target.closest('[data-action="visible"]');
+            if (vis) app.actions.toggleVisible({ measurement: vis.dataset.id });
             const btn = e.target.closest('[data-action="toggle"]');
             if (btn) app.actions.toggleMeasurement(btn.dataset.id);
         });
@@ -53,7 +67,7 @@ export class MeasurementsPanel {
         const suspects = new Set((result.suspects || []).map(s => s.id));
         const list = garden.measurements.slice().reverse();
         this.el.innerHTML = list.length ? `<div class="table-wrap"><table class="data">
-            <thead><tr><th>${escapeHtml(t('colFrom'))}</th><th>${escapeHtml(t('colTo'))}</th><th>d [m]</th><th>v [mm]</th><th>w</th><th></th></tr></thead>
+            <thead><tr><th></th><th>${escapeHtml(t('colFrom'))}</th><th>${escapeHtml(t('colTo'))}</th><th>d [m]</th><th>v [mm]</th><th>w</th><th></th></tr></thead>
             <tbody>${list.map(m => {
                 const r = result.solution.measurements.get(m.id) || {};
                 const flag = m.status === 'excluded' ? 'excluded' : suspects.has(m.id) ? 'suspect' : r.used && r.w !== null && Math.abs(r.w) > 2 ? 'warn' : '';
@@ -64,6 +78,7 @@ export class MeasurementsPanel {
                     : k === 'offset' ? `⊥ ${escapeHtml(m.to)}` : `∠ ${escapeHtml(lineLabel(m.to, m.toB))}`;
                 const residual = !r.used || !Number.isFinite(r.residual) ? '–' : angle ? `${fmt(r.residual, 2)}°` : fmt(r.residual * 1000, 0);
                 return `<tr class="${flag}" title="${escapeHtml([m.timestamp, m.note].filter(Boolean).join(' · '))}">
+                    <td>${eye(isMeasurementDrawn(m), `data-id="${escapeHtml(m.id)}"`, 'drawnOnPlan', 'hiddenOnPlan')}</td>
                     <td>${from}</td>
                     <td>${to}</td>
                     <td class="num">${angle ? `${fmt(m.distance, 1)}°` : fmt(m.distance, 3)}</td>
@@ -126,6 +141,13 @@ export class SettingsPanel {
                 <label class="check"><input type="checkbox" data-setting="autoExclude"${s.autoExclude ? ' checked' : ''}> ${escapeHtml(t('autoExclude'))}</label>
             </section>
             <section>
+                <h4>${escapeHtml(t('drawingSection'))}</h4>
+                <p class="muted small">${escapeHtml(t('drawingHelp'))}</p>
+                <label class="check"><input type="checkbox" data-setting="newPointsVisible"${s.newPointsVisible ? ' checked' : ''}> ${escapeHtml(t('newPointsVisible'))}</label>
+                <label class="check"><input type="checkbox" data-setting="newMeasurementsVisible"${s.newMeasurementsVisible ? ' checked' : ''}> ${escapeHtml(t('newMeasurementsVisible'))}</label>
+                <label class="check"><input type="checkbox" data-pref="selectOnce"${ui.selectOnce ? ' checked' : ''}> ${escapeHtml(t('selectOnce'))}</label>
+            </section>
+            <section>
                 <h4>${escapeHtml(t('exportSection'))}</h4>
                 <div class="row wrap">
                     <label class="field compact">${escapeHtml(t('paper'))}<select data-export="paper">${Object.keys(PAPERS).map(p => `<option${p === exp.paper ? ' selected' : ''}>${p}</option>`).join('')}</select></label>
@@ -152,6 +174,11 @@ export class SettingsPanel {
     onChange(e) {
         const el = e.target;
         const { garden, ui } = this.app.state;
+        if (el.dataset.pref) {
+            ui[el.dataset.pref] = el.checked;
+            this.app.saveLayers();
+            return;
+        }
         if (el.dataset.export) {
             ui.export[el.dataset.export] = el.value;
             this.app.saveLayers();

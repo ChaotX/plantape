@@ -895,3 +895,13 @@ section + section {
         max-height: none;
     }
 }
+
+.tiny.eye {
+    min-width: 0;
+    padding: 2px 6px;
+}
+
+.tiny.eye.off {
+    opacity: 0.3;
+    filter: grayscale(1);
+}

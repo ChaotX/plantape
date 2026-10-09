@@ -4,6 +4,7 @@ import { escapeHtml, fmt } from '../util.js';
 import { t } from '../i18n.js';
 import { kindOf } from '../solver/observations.js';
 import { isLine, lineEnds, lineKey } from './describe.js';
+import { isPointShown, isMeasurementDrawn } from '../model.js';
 
 export const CATEGORY_COLORS = {
     building: '#8d6e63',
@@ -88,6 +89,13 @@ export function renderScene(scene, tf, style) {
     const zRange = bounds && bounds.maxZ - bounds.minZ > 0.01 ? [bounds.minZ, bounds.maxZ] : null;
     const categories = new Map(garden.points.map(p => [p.name, p.category || '']));
     const sw = style.stroke;
+    // Visibility: measurements marked visible are lines of the plan ("drawn lines"); the others are helper
+    // lines. Each group, and points marked hidden, can be switched off (options.lines / hiddenLines /
+    // hiddenPoints). The point or line being measured from / to always shows.
+    const pointByName = new Map(garden.points.map(p => [p.name, p]));
+    const involved = name => name === scene.selected || [scene.station, scene.target].some(k => k === name || (isLine(k) && lineEnds(k).includes(name)));
+    const shownPoint = name => isPointShown(pointByName.get(name)) || options.hiddenPoints !== false || involved(name);
+    const shownMeasurement = m => (isMeasurementDrawn(m) ? options.lines !== false : options.hiddenLines !== false);
 
     // Measurement colour: excluded, suspect, large residual, unchecked.
     const styleOf = m => {
@@ -104,6 +112,9 @@ export function renderScene(scene, tf, style) {
         } else if (r.used && r.w !== null && Math.abs(r.w) > 2) {
             color = '#f57c00';
             width = sw * 1.8;
+        } else if (isMeasurementDrawn(m)) {
+            color = '#37474f';
+            width = sw * 2.2;
         } else if (r.used && r.r < 0.05) {
             dash = `${sw} ${sw * 2}`;
         }
@@ -123,7 +134,7 @@ export function renderScene(scene, tf, style) {
         return { t, x: A.x + t * dx, y: A.y + t * dy };
     };
 
-    if (options.lines !== false) {
+    {
         // Reference lines (fences, walls…): dashed, spanning their ends and the feet of their offsets.
         const refs = new Map();
         const addRef = (a, b, p = null) => {
@@ -139,6 +150,7 @@ export function renderScene(scene, tf, style) {
         };
         for (const m of garden.measurements) {
             const k = kindOf(m);
+            if (!shownMeasurement(m)) continue;
             if (k === 'offset' && m.status !== 'excluded') addRef(m.from, m.fromB, at(m.to) || null);
             else if (k === 'angle' && m.status !== 'excluded') {
                 addRef(m.from, m.fromB);
@@ -152,6 +164,7 @@ export function renderScene(scene, tf, style) {
 
         for (const m of garden.measurements) {
             const k = kindOf(m);
+            if (!shownMeasurement(m)) continue;
             const { r, color, width, dash } = styleOf(m);
             const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
             if (k === 'distance') {
@@ -253,8 +266,8 @@ export function renderScene(scene, tf, style) {
     // Error ellipses (95 %, exaggerated)
     if (options.ellipses !== false) {
         const k = ELLIPSE_K * (options.ellipseScale || 1);
-        for (const [, p] of P) {
-            if (!p.placed || p.status === 'datum' || !(p.ellipse.a > 0)) continue;
+        for (const [name, p] of P) {
+            if (!p.placed || p.status === 'datum' || !(p.ellipse.a > 0) || !shownPoint(name)) continue;
             const rx = p.ellipse.a * k * tf.scale;
             const ry = p.ellipse.b * k * tf.scale;
             if (!Number.isFinite(rx) || rx > 1e5) continue;
@@ -265,7 +278,7 @@ export function renderScene(scene, tf, style) {
 
     // Points
     for (const [name, p] of P) {
-        if (!p.placed) continue;
+        if (!p.placed || !shownPoint(name)) continue;
         const cx = X(p.x);
         const cy = Y(p.y);
         const fill = options.colorBy === 'height' && zRange ? heightColor((p.z - zRange[0]) / (zRange[1] - zRange[0])) : CATEGORY_COLORS[categories.get(name)] || CATEGORY_COLORS.other;
@@ -289,7 +302,7 @@ export function renderScene(scene, tf, style) {
 
     // Points that are not computed yet, at their sketched position (hollow).
     for (const [name, s] of scene.sketchPos || []) {
-        if (P.get(name)?.placed) continue;
+        if (P.get(name)?.placed || !shownPoint(name)) continue;
         const cx = X(s.x);
         const cy = Y(s.y);
         const r = style.pointR;
@@ -353,13 +366,16 @@ export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseS
 // ---- Interactive view ---------------------------------------------------------------------------
 
 export class PlanView {
-    // handlers: onSelect({ point } | { line: [a, b] }), onAdd(x, y) in add mode, onMove(name, x, y) in move mode
+    // handlers: onSelect({ point } | { line: [a, b] }, station) — station is true in select mode (the tap
+    // says where I am), onAdd(x, y) in add mode, onMove(name, x, y) in move mode
     constructor(svg, { onSelect, onAdd, onMove } = {}) {
         this.svg = svg;
         this.onSelect = onSelect;
         this.onAdd = onAdd;
         this.onMove = onMove;
-        this.mode = 'pan'; // 'pan' | 'add' | 'move'
+        this.mode = 'pan'; // 'pan' | 'select' | 'add' | 'move'
+        this.lastTap = null; // { t, x, y } of the last plain tap, for double-tap zoom
+        this.tapZoom = null; // double tap held down: { anchor, y0, tf0 }
         this.scene = null;
         this.tf = null;
         this.pointers = new Map();
@@ -503,6 +519,17 @@ export class PlanView {
             svg.setPointerCapture(e.pointerId);
             this.pointers.set(e.pointerId, local(e));
             this.moved = 0;
+            // Double tap (second press soon after a tap, close to it): zoom. Keeping the finger down and
+            // dragging zooms continuously — down zooms in, up zooms out — as in Google Maps.
+            const at = local(e);
+            const last = this.lastTap;
+            this.lastTap = null;
+            if (last && this.pointers.size === 1 && this.tf && performance.now() - last.t < 350 && Math.hypot(at.x - last.x, at.y - last.y) < 30) {
+                this.tapZoom = { anchor: at, y0: at.y, tf0: { ...this.tf } };
+                this.drag = null;
+                this.downPoint = this.downLine = null;
+                return;
+            }
             this.downPoint = e.target.closest?.('[data-point]')?.dataset.point || null;
             this.downLine = e.target.closest?.('[data-line]')?.dataset.line || null;
             this.downAt = local(e);
@@ -513,7 +540,16 @@ export class PlanView {
             if (!this.pointers.has(e.pointerId) || !this.tf) return;
             const prev = this.pointers.get(e.pointerId);
             const cur = local(e);
-            if (this.drag && this.pointers.size === 1) {
+            if (this.tapZoom && this.pointers.size === 1) {
+                const { anchor, y0, tf0 } = this.tapZoom;
+                this.moved += Math.hypot(cur.x - prev.x, cur.y - prev.y);
+                this.pointers.set(e.pointerId, cur);
+                const scale = Math.min(Math.max(tf0.scale * Math.exp((cur.y - y0) * 0.012), 0.05), 5000);
+                const f = scale / tf0.scale;
+                this.userMoved = true;
+                this.tf = { scale, ox: anchor.x - (anchor.x - tf0.ox) * f, oy: anchor.y - (anchor.y - tf0.oy) * f };
+                this.render();
+            } else if (this.drag && this.pointers.size === 1) {
                 this.moved += Math.hypot(cur.x - prev.x, cur.y - prev.y);
                 this.pointers.set(e.pointerId, cur);
                 this.drag = { name: this.drag.name, ...this.toWorld(cur) };
@@ -526,6 +562,7 @@ export class PlanView {
                 this.render();
             } else if (this.pointers.size === 2) {
                 this.drag = null;
+                this.tapZoom = null;
                 const [other] = [...this.pointers].filter(([id]) => id !== e.pointerId).map(([, p]) => p);
                 const before = Math.hypot(prev.x - other.x, prev.y - other.y);
                 const after = Math.hypot(cur.x - other.x, cur.y - other.y);
@@ -538,6 +575,12 @@ export class PlanView {
             if (!this.pointers.has(e.pointerId)) return;
             this.pointers.delete(e.pointerId);
             if (this.pointers.size !== 0) return;
+            if (this.tapZoom) {
+                const { anchor } = this.tapZoom;
+                this.tapZoom = null;
+                if (this.moved < 6 && e.type === 'pointerup') this.zoomAt(2, anchor.x, anchor.y); // plain double tap
+                return;
+            }
             const drag = this.drag;
             this.drag = null;
             // Sketching and moving keep the view where it is, so the next tap lands where the user aims.
@@ -549,8 +592,10 @@ export class PlanView {
             }
             if (drag) this.render();
             if (this.moved >= 6 || e.type === 'pointercancel') return;
-            if (this.downPoint) this.onSelect?.({ point: this.downPoint });
-            else if (this.downLine) this.onSelect?.({ line: lineEnds(this.downLine) });
+            this.lastTap = { t: performance.now(), ...this.downAt };
+            const station = this.mode === 'select';
+            if (this.downPoint) this.onSelect?.({ point: this.downPoint }, station);
+            else if (this.downLine) this.onSelect?.({ line: lineEnds(this.downLine) }, station);
             else if (this.mode === 'add' && this.tf) {
                 const w = this.toWorld(this.downAt);
                 this.userMoved = true;

@@ -309,3 +309,21 @@ test('sketch positions are written to the point row; queued moves of a point are
     const d = garden.points.find(p => p.name === 'D');
     assert.deepEqual([d.sketchX, d.sketchY], [2, 2]);
 });
+
+test('showing and hiding points and measurements writes the visible column', async () => {
+    const store = await seededStore();
+    await store.updatePoint('A', { visible: true });
+    await store.updateMeasurement('m1', { visible: true });
+    await store.addMeasurement({ id: 'mv', timestamp: 't', from: 'C', fromH: 0, to: 'D', toH: 0, distance: 10.09, status: 'active', note: '', visible: false });
+    const pts = sheetRows(store.id, 'Points');
+    assert.equal(pts.find(r => r[0] === 'A')[pts[0].indexOf('visible')], true);
+    const ms = sheetRows(store.id, 'Measurements');
+    const col = ms[0].indexOf('visible');
+    assert.equal(ms.find(r => r[0] === 'm1')[col], true);
+    assert.equal(ms.find(r => r[0] === 'mv')[col], false);
+    const garden = await new GoogleStore(store.id).load();
+    assert.equal(garden.points.find(p => p.name === 'A').visible, true);
+    assert.equal(garden.points.find(p => p.name === 'B').visible, undefined);
+    assert.equal(garden.measurements.find(m => m.id === 'm1').visible, true);
+    assert.equal(garden.measurements.find(m => m.id === 'mv').visible, false);
+});

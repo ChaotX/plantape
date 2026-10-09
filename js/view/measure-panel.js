@@ -13,6 +13,7 @@ import { kindOf, pointsOfMeasurement, resolveAngle, normalizeAngle, directedAngl
 import { CATEGORY_COLORS } from './plan-view.js';
 import { gainLabel } from './hints-panel.js';
 import { toEntry, fromEntry, formatDistance } from '../units.js';
+import { isMeasurementDrawn } from '../model.js';
 import {
     lineKey, isLine, lineEnds, lineLabel, selectionLabel, sameLine, availableLines,
     describeMeasurement, formatValue, formatResidual
@@ -354,7 +355,8 @@ export class MeasurePanel {
                 <span class="unit">${unitLabel}</span>
             </div>`;
         const tail = `<div class="predict" data-part="predict"></div>
-            <input id="noteInput" type="text" value="${escapeHtml(this.note)}" placeholder="${escapeHtml(t('notePlaceholder'))}">`;
+            <input id="noteInput" type="text" value="${escapeHtml(this.note)}" placeholder="${escapeHtml(t('notePlaceholder'))}">
+            <label class="check" title="${escapeHtml(t('drawOnPlanHelp'))}"><input type="checkbox" data-bind="drawOnPlan"${this.drawOnPlan() ? ' checked' : ''}> ${escapeHtml(t('drawOnPlan'))}</label>`;
         if (mode === 'offset') {
             const m = this.currentMeasurement();
             part.innerHTML = `
@@ -468,6 +470,7 @@ export class MeasurePanel {
                 const cls = m.status === 'excluded' ? 'excluded' : suspects.has(m.id) ? 'suspect' : '';
                 return `<li class="${cls}"><span>${escapeHtml(describeMeasurement(m))}</span>
                     <span class="num">${escapeHtml(formatValue(m, this.unit))}${r?.used && Number.isFinite(r.residual) ? ` <small>v ${escapeHtml(formatResidual(m, r.residual))}</small>` : ''}</span>
+                    <button type="button" class="tiny eye${isMeasurementDrawn(m) ? '' : ' off'}" data-action="visible" data-id="${escapeHtml(m.id)}" title="${escapeHtml(t(isMeasurementDrawn(m) ? 'drawnOnPlan' : 'hiddenOnPlan'))}">👁</button>
                     <button type="button" class="tiny" data-action="toggle" data-id="${escapeHtml(m.id)}">${escapeHtml(t(m.status === 'excluded' ? 'include' : 'exclude'))}</button></li>`;
             }).join('')}</ul>`;
     }
@@ -486,20 +489,34 @@ export class MeasurePanel {
     }
 
     // Selection from the plan: the first tap picks "from", later taps pick "to".
-    select(key) {
-        if (!this.ui.station) {
-            this.ui.station = key;
-            if (this.ui.target === key) this.ui.target = '';
-        } else if (key === this.ui.station) {
-            return;
-        } else {
-            if (this.ui.target !== key) this.draftTyped = false;
-            this.ui.target = key;
-        }
+    // Where I am (the select tool on the plan): a point or a line.
+    selectStation(key) {
+        if (this.ui.station === key) return;
+        this.ui.station = key;
+        if (this.ui.target === key) this.ui.target = '';
         this.draftTyped = false;
         this.applyPrefill();
         this.render();
         if (this.mode) this.el.querySelector('#distanceInput')?.focus();
+    }
+
+    // What I measure to (a plain tap on the plan). Without a station yet, the tap chooses the station.
+    selectTarget(key) {
+        if (!this.ui.station) {
+            this.selectStation(key);
+            return;
+        }
+        if (key === this.ui.station || key === this.ui.target) return;
+        this.ui.target = key;
+        this.draftTyped = false;
+        this.applyPrefill();
+        this.render();
+        if (this.mode) this.el.querySelector('#distanceInput')?.focus();
+    }
+
+    // Whether the next saved measurement is drawn on the plan: the form's checkbox, or the garden's default.
+    drawOnPlan() {
+        return this.drawVisible ?? !!this.app.state.garden?.settings.newMeasurementsVisible;
     }
 
     save(zero = false) {
@@ -515,7 +532,7 @@ export class MeasurePanel {
             this.el.querySelector('#distanceInput')?.focus();
             return;
         }
-        const measurement = { ...m, note: this.note.trim() };
+        const measurement = { ...m, note: this.note.trim(), visible: this.drawOnPlan() };
         delete measurement.now;
         if (m.kind !== 'distance') {
             delete measurement.fromH;
@@ -525,6 +542,7 @@ export class MeasurePanel {
             this.draftTyped = false;
             this.applyPrefill();
             this.note = '';
+            this.drawVisible = null;
             this.renderForm();
             this.renderHistory();
             this.renderTargets();
@@ -575,6 +593,8 @@ export class MeasurePanel {
             this.render();
         } else if (action === 'toggle') {
             this.app.actions.toggleMeasurement(btn.dataset.id);
+        } else if (action === 'visible') {
+            this.app.actions.toggleVisible({ measurement: btn.dataset.id });
         }
     }
 
@@ -611,6 +631,8 @@ export class MeasurePanel {
             this.applyPrefill();
             this.render();
             this.app.renderPlan();
+        } else if (el.dataset.bind === 'drawOnPlan') {
+            this.drawVisible = el.checked;
         } else if (el.dataset.bind === 'onlyReachable') {
             this.ui.onlyReachable = el.checked;
             this.renderTargets();
