@@ -47,3 +47,15 @@ test('a turned scene turns points, ellipses, sketches and the drag, not the rest
     assert.equal(turned.garden, scene.garden);
     assert.equal(rotateScene(scene, 0), scene);
 });
+
+test('without north the drawing turns back to the sketch', async () => {
+    const { fitSimilarity } = await import('../js/solver/initial.js');
+    const { frameRotation } = await import('../js/orientation.js');
+    // The sketch has A → B going up; the survey frame has it along +x.
+    const frame = fitSimilarity([{ s: { x: 0, y: 0 }, w: { x: 0, y: 0 } }, { s: { x: 0, y: 10 }, w: { x: 10, y: 0 } }]);
+    const turn = orientation({ rotation: 0 }, solution, frame);
+    close(rotateXY({ x: 10, y: 0 }, turn.angle), 0, 10);
+    assert.equal(frameRotation(fitSimilarity([{ s: { x: 0, y: 0 }, w: { x: 3, y: 4 } }])), 0, 'one point gives no direction');
+    // North wins over the sketch.
+    assert.ok(Math.abs(orientation({ northFrom: 'A', northTo: 'B', northBearing: 90 }, solution, frame).angle) < 1e-9);
+});

@@ -197,7 +197,7 @@ function renderPlan() {
         station: state.ui.station,
         target: state.ui.target,
         options: layers,
-        orientation: orientation(state.garden.settings, state.result.solution)
+        orientation: orientation(state.garden.settings, state.result.solution, state.frame)
     });
     $('#planEmpty').classList.toggle('hidden', state.positions.size > 0);
 }
@@ -256,7 +256,7 @@ function appLink(id) {
 }
 
 function planOptions() {
-    const turn = orientation(state.garden.settings, state.result.solution);
+    const turn = orientation(state.garden.settings, state.result.solution, state.frame);
     // The chart is turned like the plan; its axes are east / north only when north is up.
     const northUp = turn.north !== null && !(Number(state.garden.settings.rotation) % 360);
     return {
@@ -484,6 +484,16 @@ function submitMeasurement(m, done) {
     });
 }
 
+// Which side of a rectangle (0: first–second corner, 1: second–third) is the one drawn closer to parallel with
+// line [p, q], so "aligned with" never asks for a side to be parallel to a line it is drawn across.
+function alignedSide(corners, [p, q]) {
+    const at = n => state.positions.get(n);
+    const dir = (a, b) => Math.atan2(at(b).y - at(a).y, at(b).x - at(a).x);
+    if (![p, q, ...corners.slice(0, 3)].every(at)) return 0;
+    const off = (a, b) => Math.abs(Math.sin(dir(a, b) - dir(p, q))); // 0 parallel, 1 square
+    return off(corners[1], corners[2]) < off(corners[0], corners[1]) ? 1 : 0;
+}
+
 // Rectangle from four corners: its sides become lines, its corners square, and one side optionally parallel
 // to another line. Readings that already say the same are not added again.
 function rectangleDialog(corners) {
@@ -492,7 +502,7 @@ function rectangleDialog(corners) {
     const card = openModal(`
         <h3>${escapeHtml(t('rectTitle'))}</h3>
         <p>${escapeHtml(t('rectText', { corners: corners.join(' → ') }))}</p>
-        <label class="field">${escapeHtml(t('rectParallel', { side: `${corners[0]}–${corners[1]}` }))}<select id="rectParallel">
+        <label class="field">${escapeHtml(t('rectParallel'))}<select id="rectParallel">
             <option value="">${escapeHtml(t('rectNone'))}</option>
             ${others.map(([a, b]) => `<option value="${escapeHtml(lineKey(a, b))}">${escapeHtml(`${a}–${b}`)}</option>`).join('')}
         </select></label>
@@ -501,7 +511,8 @@ function rectangleDialog(corners) {
         create: () => {
             const parallel = card.querySelector('#rectParallel').value;
             closeModal();
-            const { lines, measurements } = rectangleMeasurements(corners, { parallelTo: parallel ? lineEnds(parallel) : null });
+            const parallelTo = parallel ? lineEnds(parallel) : null;
+            const { lines, measurements } = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 });
             const known = new Set(availableLines(state.garden).map(l => pairKey(...l)));
             for (const l of lines) if (!known.has(pairKey(l.from, l.to))) state.store.addLine({ ...l, visible: true });
             const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
@@ -803,7 +814,7 @@ const actions = {
     },
 
     exportScene() {
-        return { solution: state.result.solution, garden: state.garden, suspects: new Set(state.result.suspects.map(s => s.id)), options: state.ui.layers, orientation: orientation(state.garden.settings, state.result.solution) };
+        return { solution: state.result.solution, garden: state.garden, suspects: new Set(state.result.suspects.map(s => s.id)), options: state.ui.layers, orientation: orientation(state.garden.settings, state.result.solution, state.frame) };
     },
 
     exportSvg() {

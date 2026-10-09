@@ -60,7 +60,7 @@ export default {
     rectCornerHelp: '{n}. sarok a 4-ből ({corners}): koppints a következő sarokra. Az utolsóra újra koppintva visszavonod.',
     rectTitle: 'Téglalap',
     rectText: 'Sarkok: {corners}. A négy oldal vonal lesz, a sarkok derékszögek (90°).',
-    rectParallel: 'A(z) {side} oldal párhuzamos ezzel:',
+    rectParallel: 'Igazítva ehhez (a rajzon közelebb párhuzamos oldal lesz párhuzamos)',
     rectNone: '– semmivel –',
     rectNext: 'Ez csak az alakot rögzíti. Utána mérj meg két szomszédos oldalt, és köss egy sarkot két méréssel a kerthez (pl. a távolsága egy kerítéstől és egy, a kerítés mentén távolabbi oszloptól).',
     rectNote: 'téglalap',

@@ -26,7 +26,8 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   point again stops) or with **Line only** in the Measure tab. Such a line adds nothing to the computation by
   itself, but angles and distances from it can be measured, and it is drawn on the plan like a measured line.
 - **Rectangles:** the rectangle tool takes four corners tapped in order. Their sides become lines, the corners
-  square, and one side can be made parallel to another line. That fixes the shape; two side lengths and two
+  square, and the rectangle can be aligned with another line (the side drawn closer to parallel with it is made
+  parallel). That fixes the shape; two side lengths and two
   readings that tie one corner to the garden (e.g. its distance from a fence and to a post along it) then fix
   its size and position.
 - **Sketch on the plan:** tap **⊕** and then the plan to place a new point roughly where it is. A point named
@@ -66,7 +67,9 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   you measure to (a setting decides whether ⌖ switches itself off after one pick). **⤢** shows the whole garden.
   Zoom with the mouse wheel, two fingers, or Google Maps style: double-tap to zoom in, or double-tap and drag
   down / up to zoom in / out.
-- **Orientation:** the turn button rotates the drawing 90° clockwise. In Settings → Orientation, enter the
+- **Orientation:** the drawing is turned to look like the sketch, so a line sketched level stays level (the
+  survey x axis, from the origin to the axis point, can point anywhere). The turn button rotates it a further
+  90° clockwise. In Settings → Orientation, enter the
   compass bearing of one line (stand at its first point, aim a phone compass at the second). North is then up
   on the plan, in exports and in the sheet's chart, with a north arrow, and the sheet gets `east` / `north`
   columns. Coordinates themselves (`x`, `y`) don't change.
@@ -180,6 +183,10 @@ keep your own data there.
     transform) picks the nearest solution. Otherwise the app searches over the choices so that no branch of
     the network ends up folded.
   - Without a side point, the drawing is mirrored to match the sketch once three placed points have one.
+  - Some points can only be fixed together: each one's second reading is an angle or a distance from a line
+    through another point that is not placed yet (a rectangle tied to a fence by angles). Such a group is
+    solved jointly, starting from the sketched positions, which also pick the solution meant. A point is kept
+    only when the readings fix it; otherwise it keeps waiting.
   - Heights are then initialised from the height-offset measurements.
 - **Adjustment.**
   - Levenberg–Marquardt with the full Newton curvature of the distance function. Without it, convergence

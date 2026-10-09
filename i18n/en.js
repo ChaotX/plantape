@@ -60,7 +60,7 @@ export default {
     rectCornerHelp: 'Corner {n} of 4 ({corners}): tap the next corner. Tapping the last one again takes it back.',
     rectTitle: 'Rectangle',
     rectText: 'Corners {corners}: the four sides become lines and the corners square (90°).',
-    rectParallel: 'Side {side} parallel to',
+    rectParallel: 'Aligned with (the side drawn closer to parallel is made parallel)',
     rectNone: '– nothing –',
     rectNext: 'This fixes the shape only. Then measure two neighbouring sides, and tie one corner to the garden with two readings (e.g. its distance from a fence and to a post along it).',
     rectNote: 'rectangle',

@@ -51,3 +51,8 @@ test('a rectangle tied to a fence is placed and fully determined', () => {
     near('R4', 2, 5);
     assert.deepEqual(res.suspects, []);
 });
+
+test('rectangle helper: the parallel can be on the second side', () => {
+    const { measurements } = rectangleMeasurements(['A', 'B', 'C', 'D'], { parallelTo: ['P', 'Q'], parallelSide: 1 });
+    assert.equal(`${measurements.at(-1).to}${measurements.at(-1).toB}`, 'BC');
+});

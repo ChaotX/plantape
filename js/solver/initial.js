@@ -8,6 +8,7 @@
 // known, decide which one is meant.
 
 import { kindOf, angleDiff } from './observations.js';
+import { placeFromSeeds } from './seeded.js';
 
 export function horizontalDistance(m) {
     const dh = (m.toH || 0) - (m.fromH || 0);
@@ -494,7 +495,8 @@ export function locusSnapper(measurements, placed) {
 // to be placed, not linked: the network is trilaterated from its best-braced edge and then moved into
 // the datum frame. points: [{ name, sketchX?, sketchY? }] — sketched positions decide mirror choices and,
 // without a side point, the overall orientation. prefer: name of a point whose sketch should win (just dragged).
-export function initialPlacement(measurements, { origin, axis, side } = {}, points = [], prefer = null) {
+export function initialPlacement(measurements, settings = {}, points = [], prefer = null) {
+    const { origin, axis, side } = settings;
     const cons = new Constraints(measurements);
     const graph = cons.graph;
     if (cons.names.length === 0) return { placed: new Map(), origin: null, axis: null, order: [] };
@@ -551,6 +553,20 @@ export function initialPlacement(measurements, { origin, axis, side } = {}, poin
             }
         }
         if (!changed) break;
+    }
+
+    // Points that only the readings together fix (each waits for another): solved jointly from their sketches.
+    const waiting = cons.names.filter(n => !placed.has(n) && sketches.has(n));
+    const anchors = [...placed].filter(([n]) => sketches.has(n)).map(([n, w]) => ({ s: sketches.get(n), w }));
+    if (waiting.length && anchors.length >= 2) {
+        // The placement may be a mirror image of the sketch; with three anchors the better fit tells.
+        const flipY = q => ({ x: q.x, y: -q.y });
+        const asIs = robustFitSimilarity(anchors);
+        const mirrored = robustFitSimilarity(anchors.map(({ s: sk, w }) => ({ s: flipY(sk), w })));
+        const useMirror = anchors.length >= 3 && mirrored.sse < asIs.sse - 1e-9;
+        const T = useMirror ? mirrored : asIs;
+        const seeds = new Map(waiting.map(n => [n, T.apply(useMirror ? flipY(sketches.get(n)) : sketches.get(n))]));
+        order.push(...placeFromSeeds(measurements, placed, seeds, settings));
     }
 
     // Datum points: the requested ones when placed, otherwise sensible defaults.
