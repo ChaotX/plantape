@@ -4,6 +4,7 @@ import { escapeHtml, fmt } from '../util.js';
 import { t } from '../i18n.js';
 import { kindOf } from '../solver/observations.js';
 import { WEAK_SXY } from '../solver/planner.js';
+import { rotateScene, rotateXY } from '../orientation.js';
 import { isLine, lineEnds, lineKey } from './describe.js';
 import { isPointShown, isMeasurementDrawn, isLineDrawn } from '../model.js';
 
@@ -369,7 +370,8 @@ export function renderScene(scene, tf, style) {
 }
 
 // Scale bar + axis arrows + optional height legend, anchored at (x, y) = bottom-left in output units.
-export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseScale, showEllipses }) {
+// angle: how much the drawing is turned (radians, counter-clockwise); north: north in the survey frame or null.
+export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseScale, showEllipses, angle = 0, north = null }) {
     const out = [];
     const len = niceLength(maxBar / tf.scale / 1.5);
     const w = len * tf.scale;
@@ -380,15 +382,27 @@ export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseS
     out.push(`<text x="${x}" y="${y - h - font * 0.3}" font-size="${font}" ${ff} fill="#212121">0</text>`);
     out.push(`<text x="${x + w}" y="${y - h - font * 0.3}" font-size="${font}" ${ff} text-anchor="middle" fill="#212121">${len} m</text>`);
 
-    // Axis arrows (local survey frame: +x towards the axis point, +y to its left)
+    // Axis arrows (local survey frame: +x towards the axis point, +y to its left), turned with the drawing, around
+    // the middle of a small box; and a north arrow once north is known.
+    const L = font * 1.6;
+    const arrow = (cx, cy, a, label, color, width) => {
+        const d = { x: Math.cos(a), y: -Math.sin(a) };
+        const n = { x: -d.y, y: d.x };
+        const tip = { x: cx + d.x * L, y: cy + d.y * L };
+        const hs = font * 0.5;
+        const b = { x: tip.x - d.x * hs, y: tip.y - d.y * hs };
+        return `<path d="M${cx} ${cy}L${tip.x} ${tip.y}M${b.x + n.x * hs * 0.6} ${b.y + n.y * hs * 0.6}L${tip.x} ${tip.y}L${b.x - n.x * hs * 0.6} ${b.y - n.y * hs * 0.6}" fill="none" stroke="${color}" stroke-width="${width}"/>` +
+            `<text x="${tip.x + d.x * font * 0.7}" y="${tip.y + d.y * font * 0.7 + font * 0.35}" font-size="${font}" ${ff} text-anchor="middle" font-weight="${label === 'N' ? 'bold' : 'normal'}" fill="${color}">${label}</text>`;
+    };
     const ax = x + w + font * 3;
-    const ay = y;
-    const L = font * 3;
-    out.push(`<path d="M${ax} ${ay} h${L} m${-font * 0.6} ${-font * 0.35} l${font * 0.6} ${font * 0.35} l${-font * 0.6} ${font * 0.35} M${ax} ${ay} v${-L} m${-font * 0.35} ${font * 0.6} l${font * 0.35} ${-font * 0.6} l${font * 0.35} ${font * 0.6}" fill="none" stroke="#212121" stroke-width="${stroke * 1.5}"/>`);
-    out.push(`<text x="${ax + L + font * 0.3}" y="${ay + font * 0.35}" font-size="${font}" ${ff} fill="#212121">x</text>`);
-    out.push(`<text x="${ax - font * 0.3}" y="${ay - L - font * 0.3}" font-size="${font}" ${ff} fill="#212121">y</text>`);
-
-    let lx = ax + L + font * 2.5;
+    const ay = y - font * 0.6;
+    out.push(arrow(ax, ay, angle, 'x', '#212121', stroke * 1.5), arrow(ax, ay, angle + Math.PI / 2, 'y', '#212121', stroke * 1.5));
+    let lx = ax + L + font * 2;
+    if (north !== null) {
+        lx += font;
+        out.push(arrow(lx, ay, north + angle, 'N', '#c62828', stroke * 2));
+        lx += L + font * 1.5;
+    }
     if (zRange) {
         const gw = font * 8;
         const steps = 12;
@@ -445,8 +459,20 @@ export class PlanView {
         else this.render();
     }
 
+    // How much the drawing is turned (radians, counter-clockwise) and north in the survey frame (or null):
+    // scene.orientation, from orientation() in orientation.js.
+    get angle() {
+        return this.scene?.orientation?.angle || 0;
+    }
+
+    // The scene as drawn: plan positions turned by the view's angle.
+    turned(scene = this.scene) {
+        return rotateScene(scene, this.angle);
+    }
+
     bounds() {
-        return placedBounds(this.scene?.solution, this.scene?.sketchPos?.values() || []);
+        const s = this.turned();
+        return placedBounds(s?.solution, s?.sketchPos?.values() || []);
     }
 
     fit() {
@@ -488,8 +514,9 @@ export class PlanView {
     }
 
     centerOn(name) {
-        const p = this.scene?.solution?.points.get(name);
-        const at = p?.placed ? p : this.scene?.sketchPos?.get(name);
+        const s = this.turned();
+        const p = s?.solution?.points.get(name);
+        const at = p?.placed ? p : s?.sketchPos?.get(name);
         if (!at) return;
         const { w, h } = this.size();
         this.userMoved = true;
@@ -509,9 +536,9 @@ export class PlanView {
         return this.tf ? this.toWorld({ x: w / 2, y: h / 2 }) : { x: 0, y: 0 };
     }
 
-    // Screen (svg pixels) → plan coordinates in metres.
+    // Screen (svg pixels) → plan coordinates in metres, in the survey frame (the drawing may be turned).
     toWorld(p) {
-        return { x: (p.x - this.tf.ox) / this.tf.scale, y: (this.tf.oy - p.y) / this.tf.scale };
+        return rotateXY({ x: (p.x - this.tf.ox) / this.tf.scale, y: (this.tf.oy - p.y) / this.tf.scale }, -this.angle);
     }
 
     render() {
@@ -519,7 +546,7 @@ export class PlanView {
         const { w, h } = this.size();
         this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
         const ellipseScale = this.ellipseScale();
-        const scene = { ...this.scene, drag: this.drag, options: { ...this.scene.options, ellipseScale } };
+        const scene = this.turned({ ...this.scene, drag: this.drag, options: { ...this.scene.options, ellipseScale } });
         const b = placedBounds(this.scene.solution);
         const zRange = this.scene.options?.colorBy === 'height' && b && b.maxZ - b.minZ > 0.01 ? [b.minZ, b.maxZ] : null;
         this.svg.innerHTML =
@@ -527,7 +554,7 @@ export class PlanView {
             this.renderGrid(w, h) +
             renderScene(scene, this.tf, { pointR: 5, font: 13, stroke: 1.2, hit: 16 }) +
             `<rect x="6" y="${h - 40}" width="${Math.max(Math.min(w - 12, 520), 0)}" height="34" rx="6" fill="#fff" fill-opacity="0.85"/>` +
-            renderOverlay({ tf: this.tf, x: 16, y: h - 14, font: 11, stroke: 1, maxBar: Math.min(w * 0.3, 160), zRange, ellipseScale, showEllipses: scene.options?.ellipses !== false });
+            renderOverlay({ tf: this.tf, x: 16, y: h - 14, font: 11, stroke: 1, maxBar: Math.min(w * 0.3, 160), zRange, ellipseScale, showEllipses: scene.options?.ellipses !== false, angle: this.angle, north: this.scene.orientation?.north ?? null });
     }
 
     renderGrid(w, h) {

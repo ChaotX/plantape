@@ -485,3 +485,14 @@ test('an old sheet gets the description column after its other new columns, with
     assert.deepEqual(h.slice(-4), ['residual', 'w', 'flag', 'description']);
     assert.equal(rows[3][h.indexOf('description')], 'A–B ∠ A–C = 90.0°');
 });
+
+test('with a known north the sheet gets east / north columns', async () => {
+    const store = await seededStore();
+    const res = snoop(solverInput(store.garden));
+    const labels = { link: 'Open', note: 'Note', title: 'T', x: 'x', points: 'P', lines: 'L', helpers: 'H' };
+    // North is the survey −x direction: east = −y, north = −x.
+    await store.writeResults(res.solution, res.suspects, { appUrl: 'https://example.test/', labels, orientation: { angle: Math.PI / 2, north: Math.PI } });
+    const [h, ...rows] = sheetRows(store.id, 'Points');
+    const b = rows.find(r => r[0] === 'B');
+    assert.ok(Math.abs(b[h.indexOf('north')] + b[h.indexOf('x')]) < 1e-3 && Math.abs(b[h.indexOf('east')] + b[h.indexOf('y')]) < 1e-3, JSON.stringify(b));
+});

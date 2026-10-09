@@ -1,6 +1,7 @@
 // Export of the plan as SVG / vector PDF on a paper sheet at a chosen scale, plus data exports.
 
 import { renderScene, renderOverlay, placedBounds, autoEllipseScale } from './view/plan-view.js';
+import { rotateScene } from './orientation.js';
 import { escapeHtml, downloadBlob, safeFilename, loadScript, fmt } from './util.js';
 import { gardenToJson, toCsv } from './model.js';
 import { t } from './i18n.js';
@@ -13,7 +14,9 @@ const TITLE_H = 16;
 
 // Returns { svg, widthMm, heightMm, scale } for the given options:
 // { paper: 'A4', orientation: 'landscape' | 'portrait', scale: 'fit' | number, title, options }
-export function buildPaperSvg(scene, { paper = 'A4', orientation = 'landscape', scale = 'fit', title = '' } = {}) {
+export function buildPaperSvg(original, { paper = 'A4', orientation = 'landscape', scale = 'fit', title = '' } = {}) {
+    const turn = original.orientation || { angle: 0, north: null };
+    const scene = rotateScene(original, turn.angle);
     const [a, b] = PAPERS[paper] || PAPERS.A4;
     const W = orientation === 'portrait' ? a : b;
     const H = orientation === 'portrait' ? b : a;
@@ -53,7 +56,7 @@ export function buildPaperSvg(scene, { paper = 'A4', orientation = 'landscape', 
         `<text x="${MARGIN + 3}" y="${tb.y + 12}" font-size="2.6" ${ff} fill="#424242">${escapeHtml(t('exportSubtitle', { date, points: [...scene.solution.points.values()].filter(p => p.placed).length, measurements: scene.garden.measurements.length }))}</text>`,
         `<text x="${W - MARGIN - 3}" y="${tb.y + 6.5}" font-size="4.2" font-weight="bold" ${ff} text-anchor="end" fill="#212121">1:${S}</text>`,
         `<text x="${W - MARGIN - 3}" y="${tb.y + 12}" font-size="2.6" ${ff} text-anchor="end" fill="#424242">${escapeHtml(t('exportPaper', { paper }))}</text>`,
-        `<g>${renderOverlay({ tf, x: W / 2 - 40, y: tb.y + TITLE_H - 3, font: 2.4, stroke: 0.2, maxBar: 45, zRange, ellipseScale, showEllipses: scene.options?.ellipses !== false })}</g>`,
+        `<g>${renderOverlay({ tf, x: W / 2 - 40, y: tb.y + TITLE_H - 3, font: 2.4, stroke: 0.2, maxBar: 45, zRange, ellipseScale, showEllipses: scene.options?.ellipses !== false, angle: turn.angle, north: turn.north })}</g>`,
         '</svg>'
     ].join('');
     return { svg, widthMm: W, heightMm: H, scale: S };

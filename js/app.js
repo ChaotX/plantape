@@ -9,6 +9,7 @@ import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey, weakPointGains, WEAK_SXY } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { rectangleMeasurements } from './rectangle.js';
+import { orientation } from './orientation.js';
 import { kindOf, pointsOfMeasurement } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, sameLine, availableLines, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
@@ -195,7 +196,8 @@ function renderPlan() {
         selected: state.ui.selected,
         station: state.ui.station,
         target: state.ui.target,
-        options: layers
+        options: layers,
+        orientation: orientation(state.garden.settings, state.result.solution)
     });
     $('#planEmpty').classList.toggle('hidden', state.positions.size > 0);
 }
@@ -254,9 +256,15 @@ function appLink(id) {
 }
 
 function planOptions() {
+    const turn = orientation(state.garden.settings, state.result.solution);
+    // The chart is turned like the plan; its axes are east / north only when north is up.
+    const northUp = turn.north !== null && !(Number(state.garden.settings.rotation) % 360);
     return {
         appUrl: appLink(state.store.id),
+        orientation: turn,
         labels: {
+            xAxis: northUp ? 'E [m]' : turn.angle ? '[m]' : 'x [m]',
+            yAxis: northUp ? 'N [m]' : turn.angle ? '[m]' : 'y [m]',
             link: t('sheetAppLink'),
             note: t('sheetPlanNote', { date: nowStamp() }),
             title: state.store.title,
@@ -700,6 +708,16 @@ const actions = {
         if (help && !quiet) toast(t(help), 'info');
     },
 
+    // Turns the drawing 90° clockwise (coordinates stay as they are).
+    rotate() {
+        const s = state.garden.settings;
+        s.rotation = (((Number(s.rotation) || 0) - 90) % 360 + 360) % 360;
+        actions.saveSettings();
+        renderPlan();
+        planView.fit();
+        if (state.ui.tab === 'settings') panels.settings.render();
+    },
+
     selectPoint(name) {
         state.ui.selected = state.ui.selected === name ? '' : name;
         renderPlan();
@@ -719,7 +737,7 @@ const actions = {
         recompute();
         renderPlan();
         renderTabs();
-        if (['origin', 'axis', 'side', 'flip'].includes(key)) planView.fit();
+        if (['origin', 'axis', 'side', 'flip', 'rotation', 'northFrom', 'northTo', 'northBearing'].includes(key)) planView.fit();
     },
 
     saveSettings() {
@@ -785,7 +803,7 @@ const actions = {
     },
 
     exportScene() {
-        return { solution: state.result.solution, garden: state.garden, suspects: new Set(state.result.suspects.map(s => s.id)), options: state.ui.layers };
+        return { solution: state.result.solution, garden: state.garden, suspects: new Set(state.result.suspects.map(s => s.id)), options: state.ui.layers, orientation: orientation(state.garden.settings, state.result.solution) };
     },
 
     exportSvg() {
@@ -946,6 +964,7 @@ function bindMainScreen() {
     $('#moveButton').addEventListener('click', () => actions.setTool('move'));
     $('#lineButton').addEventListener('click', () => actions.setTool('line'));
     $('#rectButton').addEventListener('click', () => actions.setTool('rect'));
+    $('#rotateButton').addEventListener('click', () => actions.rotate());
     $('#layersButton').addEventListener('click', () => {
         renderLayersMenu();
         $('#layersMenu').classList.toggle('hidden');

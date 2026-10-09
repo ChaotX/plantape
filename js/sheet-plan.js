@@ -111,7 +111,7 @@ export function planChart(sheetId, table, labels) {
                 chartType: 'SCATTER',
                 legendPosition: 'BOTTOM_LEGEND',
                 headerCount: 1,
-                axis: [axis('BOTTOM_AXIS', 'x [m]', frame.x0, frame.x1), axis('LEFT_AXIS', 'y [m]', frame.y0, frame.y1)],
+                axis: [axis('BOTTOM_AXIS', labels.xAxis || 'x [m]', frame.x0, frame.x1), axis('LEFT_AXIS', labels.yAxis || 'y [m]', frame.y0, frame.y1)],
                 domains: [{ domain: range(0) }],
                 series
             }

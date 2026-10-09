@@ -66,6 +66,10 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   you measure to (a setting decides whether ⌖ switches itself off after one pick). **⤢** shows the whole garden.
   Zoom with the mouse wheel, two fingers, or Google Maps style: double-tap to zoom in, or double-tap and drag
   down / up to zoom in / out.
+- **Orientation:** the turn button rotates the drawing 90° clockwise. In Settings → Orientation, enter the
+  compass bearing of one line (stand at its first point, aim a phone compass at the second). North is then up
+  on the plan, in exports and in the sheet's chart, with a north arrow, and the sheet gets `east` / `north`
+  columns. Coordinates themselves (`x`, `y`) don't change.
 - **What the plan shows:** each point and measurement can be shown on the plan or hidden (👁 in the tables and
   in the measuring history; new ones are hidden by default, which can be changed in Settings). Measurements
   shown on the plan are its drawn lines (walls, fences…), the others are helper lines. The ☰ menu on the plan

@@ -148,6 +148,15 @@ export class SettingsPanel {
                 <label class="check"><input type="checkbox" data-setting="flip"${s.flip ? ' checked' : ''}> ${escapeHtml(t('flip'))}</label>
             </section>
             <section>
+                <h4>${escapeHtml(t('orientationSection'))}</h4>
+                <label class="field">${escapeHtml(t('rotation'))}<select data-setting="rotation">
+                    ${[0, 270, 180, 90].map(v => `<option value="${v}"${Number(s.rotation) === v ? ' selected' : ''}>${escapeHtml(t(`rotation_${v}`))}</option>`).join('')}</select></label>
+                <div class="sub-label">${escapeHtml(t('northLine'))}</div>
+                <div class="row">${pointSelect('northFrom', '–')}<span>→</span>${pointSelect('northTo', '–')}</div>
+                <label class="field">${escapeHtml(t('northBearing'))}<input type="text" inputmode="decimal" data-setting="northBearing" value="${escapeHtml(String(s.northBearing ?? ''))}" placeholder="0–360"></label>
+                <p class="muted small">${escapeHtml(t('northHelp'))}</p>
+            </section>
+            <section>
                 <h4>${escapeHtml(t('surveySection'))}</h4>
                 <label class="check"><input type="checkbox" data-setting="mode3d"${s.mode3d ? ' checked' : ''}> ${escapeHtml(t('mode3d'))}</label>
                 <label class="field">${escapeHtml(t('entryUnit'))}<select data-setting="entryUnit">
@@ -219,6 +228,10 @@ export class SettingsPanel {
         } else if (key === 'angleSigma') {
             const v = Number(el.value);
             if (Number.isFinite(v) && v > 0) s.angleSigma = v;
+        } else if (key === 'rotation') {
+            s.rotation = Number(el.value) || 0;
+        } else if (key === 'northBearing') {
+            s.northBearing = el.value.trim();
         } else if (key === 'tapeLength') {
             const v = Number(el.value);
             if (v > 0) s[key] = v;

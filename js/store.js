@@ -8,6 +8,7 @@ import {
 import * as sheets from './sheets-api.js';
 import { HttpError, quoteSheet, columnLetter } from './sheets-api.js';
 import { PLAN_TAB, PLAN_FIRST_ROW, PLAN_COLUMNS, planTable, planChart } from './sheet-plan.js';
+import { rotateScene, eastNorth } from './orientation.js';
 import { storage, uid, fmt } from './util.js';
 import { describeMeasurement } from './view/describe.js';
 import { kindOf } from './solver/observations.js';
@@ -544,6 +545,12 @@ export class GoogleStore extends BaseStore {
             x: p => round(p.x), y: p => round(p.y), z: p => round(p.z),
             sigma_xy: p => round(p.sxy), sigma_z: p => round(p.sz), links: p => p.links, status: p => p.status
         };
+        // Once the compass bearing of a line is known: geographic east / north as well.
+        const north = plan?.orientation?.north ?? null;
+        if (north !== null) {
+            pointOutputs.east = p => round(eastNorth(p, north).x);
+            pointOutputs.north = p => round(eastNorth(p, north).y);
+        }
         this.addColumns(data, TABS.points, pointValues, pointOutputs, row => {
             const name = String(row[pointValues[0].map(h => String(h).trim().toLowerCase()).indexOf('name')] ?? '').trim();
             return solution.points.get(name) || null;
@@ -575,7 +582,8 @@ export class GoogleStore extends BaseStore {
 
     // The Plan tab (first tab of the sheet): a link that opens this garden in the app, and a chart of the
     // computed positions. The tab is rewritten each time.
-    async writePlan(solution, { appUrl, labels }) {
+    async writePlan(original, { appUrl, labels, orientation = null }) {
+        const solution = rotateScene({ solution: original }, orientation?.angle || 0).solution; // drawn like the plan
         const meta = await this.readMeta();
         const tab = (meta.sheets || []).find(s => s.properties.title === PLAN_TAB);
         const requests = (tab?.charts || []).map(c => ({ deleteEmbeddedObject: { objectId: c.chartId } }));
