@@ -5,12 +5,13 @@ import { isConfigured, hasValidToken, requestToken, signOut } from './google-aut
 import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
 import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn, isLineDrawn } from './model.js';
-import { snoop, checkMeasurement } from './solver/blunders.js';
+import { snoop, checkMeasurement, CRITICAL_W } from './solver/blunders.js';
+import { solveNetwork } from './solver/adjust.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey, weakPointGains, WEAK_SXY } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { rectangleMeasurements } from './rectangle.js';
 import { orientation } from './orientation.js';
-import { kindOf, pointsOfMeasurement } from './solver/observations.js';
+import { kindOf, pointsOfMeasurement, isRule } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, sameLine, availableLines, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
@@ -452,8 +453,49 @@ function commitMeasurement(m, check, done) {
     done?.();
 }
 
-// Checks a new measurement against the current solution; suspicious values open the typo dialog.
+// A rule (square corner, parallel, on the line) that the readings so far contradict: { check, worst: the
+// measurements that disagree with it most } or null. Held exactly, such a rule would push the others off.
+function ruleConflict(m) {
+    if (state.garden.settings.exactRules === false || !isRule(m) || !state.result) return null;
+    const check = checkMeasurement(state.result.solution, m);
+    if (check.status !== 'suspect') return null;
+    const trial = solveNetwork(solverInput({ ...state.garden, measurements: [...state.garden.measurements, { ...m, id: '__rule', status: 'active' }] }));
+    const worst = [...trial.measurements]
+        .filter(([id, r]) => id !== '__rule' && r.used && r.w !== null && Math.abs(r.w) > CRITICAL_W)
+        .sort((a, b) => Math.abs(b[1].w) - Math.abs(a[1].w))
+        .slice(0, 4)
+        .map(([id]) => state.garden.measurements.find(x => x.id === id))
+        .filter(Boolean);
+    return { m, check, worst };
+}
+
+// Asks before saving rules that contradict the readings; onSave() saves them anyway.
+function ruleConflictDialog(conflicts, onSave) {
+    openModal(`
+        <h3>${escapeHtml(t('ruleConflictTitle'))}</h3>
+        ${conflicts.map(({ m, check, worst }) => `<p>${escapeHtml(t('ruleConflictText', { what: describeMeasurement(m, { heights: false }), value: formatValue(m, unit()), predicted: formatExpected(m, check.predicted, unit()) }))}</p>
+            ${worst.length ? `<p class="muted small">${escapeHtml(t('ruleConflictWith'))}</p><ul class="plain small">${worst.map(x => `<li>${escapeHtml(`${describeMeasurement(x, { heights: false })} = ${formatValue(x, unit())}`)}</li>`).join('')}</ul>` : ''}`).join('')}
+        <p class="muted small">${escapeHtml(t('ruleConflictHelp'))}</p>
+        <div class="row end"><button type="button" data-action="close">${escapeHtml(t('cancel'))}</button><button type="button" data-action="save">${escapeHtml(t('saveAnyway'))}</button></div>`, {
+        save: () => {
+            closeModal();
+            onSave();
+        }
+    });
+}
+
+// Checks a new measurement against the current solution; suspicious values open the typo dialog, rules that
+// contradict the readings the conflict dialog.
 function submitMeasurement(m, done) {
+    const conflict = ruleConflict(m);
+    if (conflict) {
+        ruleConflictDialog([conflict], () => commitMeasurement(m, null, done));
+        return;
+    }
+    if (isRule(m) && state.garden.settings.exactRules !== false) {
+        commitMeasurement(m, { status: 'ok' }, done); // a rule is not a typed number
+        return;
+    }
     const check = checkMeasurement(state.result.solution, m);
     if (check.status !== 'suspect') {
         commitMeasurement(m, check, done);
@@ -511,22 +553,32 @@ function rectangleDialog(corners) {
         create: () => {
             const parallel = card.querySelector('#rectParallel').value;
             closeModal();
+            const add = () => addRectangle(corners, parallel);
             const parallelTo = parallel ? lineEnds(parallel) : null;
-            const { lines, measurements } = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 });
-            const known = new Set(availableLines(state.garden).map(l => pairKey(...l)));
-            for (const l of lines) if (!known.has(pairKey(l.from, l.to))) state.store.addLine({ ...l, visible: true });
-            const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
-                ((sameLine(m.from, m.fromB, x.from, x.fromB) && sameLine(m.to, m.toB, x.to, x.toB)) || (sameLine(m.from, m.fromB, x.to, x.toB) && sameLine(m.to, m.toB, x.from, x.fromB)));
-            let added = 0;
-            for (const m of measurements) {
-                if (state.garden.measurements.some(x => sameAngle(m, x))) continue;
-                state.store.addMeasurement({ id: uid('m'), timestamp: nowStamp(), note: t('rectNote'), visible: state.garden.settings.newMeasurementsVisible, ...m });
-                added++;
-            }
-            refresh();
-            toast(t('rectAdded', { n: added }), 'ok');
+            const conflicts = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 })
+                .measurements.map(ruleConflict).filter(Boolean);
+            if (conflicts.length) ruleConflictDialog(conflicts, add);
+            else add();
         }
     });
+}
+
+// Adds the rectangle's sides (unless already lines) and its rules (unless already there).
+function addRectangle(corners, parallel) {
+    const parallelTo = parallel ? lineEnds(parallel) : null;
+    const { lines, measurements } = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 });
+    const known = new Set(availableLines(state.garden).map(l => pairKey(...l)));
+    for (const l of lines) if (!known.has(pairKey(l.from, l.to))) state.store.addLine({ ...l, visible: true });
+    const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
+        ((sameLine(m.from, m.fromB, x.from, x.fromB) && sameLine(m.to, m.toB, x.to, x.toB)) || (sameLine(m.from, m.fromB, x.to, x.toB) && sameLine(m.to, m.toB, x.from, x.fromB)));
+    let added = 0;
+    for (const m of measurements) {
+        if (state.garden.measurements.some(x => sameAngle(m, x))) continue;
+        state.store.addMeasurement({ id: uid('m'), timestamp: nowStamp(), note: t('rectNote'), visible: state.garden.settings.newMeasurementsVisible, ...m });
+        added++;
+    }
+    refresh();
+    toast(t('rectAdded', { n: added }), 'ok');
 }
 
 function confirmDelete(title, text, onConfirm) {

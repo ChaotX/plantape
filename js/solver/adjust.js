@@ -13,13 +13,14 @@
 
 import { cholesky, cholSolve, cholInverse, ellipse2 } from './linalg.js';
 import { initialPlacement } from './initial.js';
-import { observe, kindOf, observationSigma, isValidMeasurement, pointsOfMeasurement, toDisplayUnits, normalizeAngle } from './observations.js';
+import { observe, kindOf, observationSigma, isValidMeasurement, pointsOfMeasurement, toDisplayUnits, normalizeAngle, isRule } from './observations.js';
 
 export const DEFAULT_SOLVER_SETTINGS = {
     sigmaConst: 0.005,
     sigmaRel: 0.002,
     lineSigma: 0.01,      // offsets from a line: straightness of the fence / wall [m]
     angleSigma: 1,        // angles between lines [°]
+    exactRules: true,     // square corners, parallels and "on the line" held exactly (observations.js)
     slopeSigma0: 0.1,     // smoothness prior: constant part [m]
     slopeSigma: 0.15,     // smoothness prior: expected terrain slope (15 %)
     origin: '',
@@ -305,12 +306,15 @@ export function solveNetwork(input, options = {}) {
         const varPred = quadForm(solution, row);
         const qvv = Math.max(o.sigma * o.sigma - varPred, 0);
         const r = qvv / (o.sigma * o.sigma);
-        const w = r > 0.01 ? v / Math.sqrt(qvv) : null;
+        // A rule held exactly has a tiny redundancy, but its test value is still well defined: it measures how far
+        // the other readings pull away from it.
+        const rule = settings.exactRules !== false && isRule(o.m);
+        const w = r > 0.01 || (rule && r > 1e-7) ? v / Math.sqrt(qvv) : null;
         sumV2 += o.weight * v * v;
         sumR += r;
         const disp = val => toDisplayUnits(o.m, val);
         measurementResults.set(o.m.id, {
-            used: true, kind: o.kind, computed: row.value, residual: disp(v), sigma: disp(o.sigma), sigmaPred: disp(Math.sqrt(varPred)), r, w
+            used: true, kind: o.kind, computed: row.value, residual: disp(v), sigma: disp(o.sigma), sigmaPred: disp(Math.sqrt(varPred)), r, w, rule
         });
     }
     for (const m of input.measurements) {

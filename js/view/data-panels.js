@@ -169,6 +169,7 @@ export class SettingsPanel {
                 <label class="field">${escapeHtml(t('lineSigma'))}<input type="number" min="0" step="0.5" data-setting="lineSigma" value="${fmt(s.lineSigma * 100, 1)}"></label>
                 <label class="field">${escapeHtml(t('angleSigma'))}<input type="number" min="0.1" step="0.5" data-setting="angleSigma" value="${fmt(s.angleSigma, 1)}"></label>
                 <label class="check"><input type="checkbox" data-setting="autoExclude"${s.autoExclude ? ' checked' : ''}> ${escapeHtml(t('autoExclude'))}</label>
+                <label class="check" title="${escapeHtml(t('exactRulesHelp'))}"><input type="checkbox" data-setting="exactRules"${s.exactRules !== false ? ' checked' : ''}> ${escapeHtml(t('exactRules'))}</label>
             </section>
             <section>
                 <h4>${escapeHtml(t('drawingSection'))}</h4>

@@ -167,6 +167,10 @@ keep your own data there.
     modulo 180°, so the direction of either line drops out.
   - Weights come from σ = 5 mm + 2 mm/m for distances (both editable), plus 1 cm for the straightness of a
     fence or wall for distances from a line, and 1° for angles (both editable).
+  - Rules (a square corner 90°, a parallel 0°, a point on a line 0 m) state the shape that is meant, so they
+    are held exactly (σ 0.01° / 1 mm; can be switched off in Settings). A rectangle stays a rectangle, and when
+    the tape readings disagree, the data snooping shows which. A new rule that contradicts the readings is
+    questioned when it is entered, with the readings it disagrees with.
 - **Datum.** The origin point is (0, 0, 0), the axis point lies on +x, and the side point is on the +y side.
   All three can be chosen in Settings and don't need to be measured to each other.
 - **Heights.**

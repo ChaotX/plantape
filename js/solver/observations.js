@@ -56,9 +56,21 @@ export function isValidMeasurement(m) {
     return !same && m.distance >= 0 && m.distance < 180;
 }
 
+// Rules: a square corner (90°), a parallel (0°) or a point on a line (0 m from it). They state the shape that
+// is meant rather than a tape reading, so unless settings.exactRules is false they are held (almost) exactly:
+// a rectangle stays a rectangle, and a reading that disagrees is the one that shows up as not fitting.
+export const RULE_ANGLE_SIGMA = 0.01; // °
+export const RULE_OFFSET_SIGMA = 0.001; // m
+
+export function isRule(m) {
+    const k = kindOf(m);
+    return (k === 'angle' && (m.distance === 0 || m.distance === 90)) || (k === 'offset' && m.distance === 0);
+}
+
 // A priori standard deviation of an observation in its own unit (metres, or radians for angles).
 export function observationSigma(m, settings) {
     const k = kindOf(m);
+    if (settings.exactRules !== false && isRule(m)) return k === 'angle' ? RULE_ANGLE_SIGMA * DEG : RULE_OFFSET_SIGMA;
     if (k === 'angle') return Math.max(settings.angleSigma ?? 1, 1e-3) * DEG;
     const s = settings.sigmaConst + settings.sigmaRel * Math.abs(m.distance);
     return k === 'offset' ? s + (settings.lineSigma ?? 0.01) : s;

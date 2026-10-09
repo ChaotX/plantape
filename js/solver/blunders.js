@@ -171,13 +171,13 @@ export function snoop(input, { critical = null, maxRemovals = 5, minRedundancy =
     let solution = initial;
     if (critical === null) {
         let tested = 0;
-        for (const r of initial.measurements.values()) if (r.used && r.w !== null && r.r >= minRedundancy) tested++;
+        for (const r of initial.measurements.values()) if (r.used && r.w !== null && (r.r >= minRedundancy || r.rule)) tested++;
         critical = criticalW(tested);
     }
     for (let iter = 0; iter < maxRemovals; iter++) {
         let worst = null;
         for (const [id, r] of solution.measurements) {
-            if (!r.used || r.w === null || r.r < minRedundancy) continue;
+            if (!r.used || r.w === null || (r.r < minRedundancy && !r.rule)) continue;
             if (!worst || Math.abs(r.w) > Math.abs(worst.w)) worst = { id, w: r.w, r: r.r };
         }
         if (!worst || Math.abs(worst.w) <= critical) break;

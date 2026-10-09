@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS = {
     flip: false,
     mode3d: true,
     autoExclude: true,
+    exactRules: true,
     entryUnit: 'cm',
     rotation: 0, // how the plan is drawn: turned counter-clockwise by this many degrees
     northFrom: '', // compass bearing (° clockwise from north) of the direction northFrom → northTo
@@ -292,6 +293,7 @@ export function solverInput(garden, prefer = null) {
             sigmaRel: s.sigmaRel,
             lineSigma: s.lineSigma,
             angleSigma: s.angleSigma,
+            exactRules: s.exactRules,
             origin: s.origin,
             axis: s.axis,
             side: s.side,
