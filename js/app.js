@@ -8,6 +8,7 @@ import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, is
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
+import { rectangleMeasurements } from './rectangle.js';
 import { kindOf, pointsOfMeasurement } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, sameLine, availableLines, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
@@ -439,6 +440,40 @@ function submitMeasurement(m, done) {
     });
 }
 
+// Rectangle from four corners: its sides become lines, its corners square, and one side optionally parallel
+// to another line. Readings that already say the same are not added again.
+function rectangleDialog(corners) {
+    const ownSide = (a, b) => corners.some((c, i) => sameLine(a, b, c, corners[(i + 1) % 4]));
+    const others = availableLines(state.garden).filter(([a, b]) => !ownSide(a, b));
+    const card = openModal(`
+        <h3>${escapeHtml(t('rectTitle'))}</h3>
+        <p>${escapeHtml(t('rectText', { corners: corners.join(' → ') }))}</p>
+        <label class="field">${escapeHtml(t('rectParallel', { side: `${corners[0]}–${corners[1]}` }))}<select id="rectParallel">
+            <option value="">${escapeHtml(t('rectNone'))}</option>
+            ${others.map(([a, b]) => `<option value="${escapeHtml(lineKey(a, b))}">${escapeHtml(`${a}–${b}`)}</option>`).join('')}
+        </select></label>
+        <p class="muted small">${escapeHtml(t('rectNext'))}</p>
+        <div class="row end"><button type="button" data-action="close">${escapeHtml(t('cancel'))}</button><button type="button" class="primary" data-action="create">${escapeHtml(t('create'))}</button></div>`, {
+        create: () => {
+            const parallel = card.querySelector('#rectParallel').value;
+            closeModal();
+            const { lines, measurements } = rectangleMeasurements(corners, { parallelTo: parallel ? lineEnds(parallel) : null });
+            const known = new Set(availableLines(state.garden).map(l => pairKey(...l)));
+            for (const l of lines) if (!known.has(pairKey(l.from, l.to))) state.store.addLine({ ...l, visible: true });
+            const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
+                ((sameLine(m.from, m.fromB, x.from, x.fromB) && sameLine(m.to, m.toB, x.to, x.toB)) || (sameLine(m.from, m.fromB, x.to, x.toB) && sameLine(m.to, m.toB, x.from, x.fromB)));
+            let added = 0;
+            for (const m of measurements) {
+                if (state.garden.measurements.some(x => sameAngle(m, x))) continue;
+                state.store.addMeasurement({ id: uid('m'), timestamp: nowStamp(), note: t('rectNote'), visible: state.garden.settings.newMeasurementsVisible, ...m });
+                added++;
+            }
+            refresh();
+            toast(t('rectAdded', { n: added }), 'ok');
+        }
+    });
+}
+
 function confirmDelete(title, text, onConfirm) {
     openModal(`
         <h3>${escapeHtml(title)}</h3>
@@ -519,6 +554,10 @@ const actions = {
             actions.lineTap(sel);
             return;
         }
+        if (state.ui.tool === 'rect') {
+            actions.rectTap(sel);
+            return;
+        }
         const key = sel.line ? lineKey(...sel.line) : sel.point;
         if (!station && !sel.line && state.ui.tab !== 'measure') {
             actions.selectPoint(sel.point);
@@ -552,6 +591,23 @@ const actions = {
         state.ui.lineStart = sel.point;
         state.ui.selected = sel.point;
         renderPlan();
+    },
+
+    // Rectangle tool: tap the four corners in order (tapping the last one again takes it back).
+    rectTap(sel) {
+        if (!sel.point) return;
+        const corners = state.ui.rectCorners || (state.ui.rectCorners = []);
+        if (corners.at(-1) === sel.point) corners.pop();
+        else if (!corners.includes(sel.point)) corners.push(sel.point);
+        state.ui.selected = corners.at(-1) || '';
+        renderPlan();
+        if (corners.length < 4) {
+            toast(t('rectCornerHelp', { n: corners.length + 1, corners: corners.join(' → ') || '–' }), 'info');
+            return;
+        }
+        const chosen = corners.slice();
+        actions.setTool('pan', { quiet: true }); // also clears the corners and their highlight
+        rectangleDialog(chosen);
     },
 
     // A line without a reading between two points; it can be drawn on the plan and used in angles and offsets.
@@ -591,17 +647,19 @@ const actions = {
 
     setTool(tool, { quiet = false } = {}) {
         state.ui.tool = state.ui.tool === tool ? 'pan' : tool;
-        if (state.ui.lineStart) {
-            if (state.ui.selected === state.ui.lineStart) state.ui.selected = '';
+        if (state.ui.lineStart || state.ui.rectCorners?.length) {
+            if ([state.ui.lineStart, ...(state.ui.rectCorners || [])].includes(state.ui.selected)) state.ui.selected = '';
             state.ui.lineStart = '';
+            state.ui.rectCorners = [];
             renderPlan();
         }
-        planView.setMode(state.ui.tool === 'line' ? 'pan' : state.ui.tool);
+        planView.setMode(['line', 'rect'].includes(state.ui.tool) ? 'pan' : state.ui.tool);
         $('#lineButton').classList.toggle('active', state.ui.tool === 'line');
+        $('#rectButton').classList.toggle('active', state.ui.tool === 'rect');
         $('#selectButton').classList.toggle('active', state.ui.tool === 'select');
         $('#addPointButton').classList.toggle('active', state.ui.tool === 'add');
         $('#moveButton').classList.toggle('active', state.ui.tool === 'move');
-        const help = { select: 'toolSelectHelp', add: 'toolAddHelp', move: 'toolMoveHelp', line: 'toolLineHelp' }[state.ui.tool];
+        const help = { select: 'toolSelectHelp', add: 'toolAddHelp', move: 'toolMoveHelp', line: 'toolLineHelp', rect: 'toolRectHelp' }[state.ui.tool];
         if (help && !quiet) toast(t(help), 'info');
     },
 
@@ -850,6 +908,7 @@ function bindMainScreen() {
     $('#addPointButton').addEventListener('click', () => actions.setTool('add'));
     $('#moveButton').addEventListener('click', () => actions.setTool('move'));
     $('#lineButton').addEventListener('click', () => actions.setTool('line'));
+    $('#rectButton').addEventListener('click', () => actions.setTool('rect'));
     $('#layersButton').addEventListener('click', () => {
         renderLayersMenu();
         $('#layersMenu').classList.toggle('hidden');

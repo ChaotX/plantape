@@ -25,6 +25,10 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   with the line tool on the plan (tap one end, then the other; further taps continue the line, tapping the last
   point again stops) or with **Line only** in the Measure tab. Such a line adds nothing to the computation by
   itself, but angles and distances from it can be measured, and it is drawn on the plan like a measured line.
+- **Rectangles:** the rectangle tool takes four corners tapped in order. Their sides become lines, the corners
+  square, and one side can be made parallel to another line. That fixes the shape; two side lengths and two
+  readings that tie one corner to the garden (e.g. its distance from a fence and to a post along it) then fix
+  its size and position.
 - **Sketch on the plan:** tap **⊕** and then the plan to place a new point roughly where it is. A point named
   in the Measure tab is sketched next to the point or line you measure from; drag it into place. Two readings of
   any kind fix a point up to a mirror image (which side of the fence, which way along it); the sketch picks the
