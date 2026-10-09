@@ -1,11 +1,15 @@
 // Where each point is drawn on the plan: its computed position, its sketched position (mapped into the
 // plan frame), or — for a point with neither — a place in a "parking row" below the plan, from where it
-// can be dragged to where it belongs.
+// can be dragged to where it belongs. A point that is not fixed yet but has a reading tied to computed
+// points is drawn on that reading, nearest to its sketch: on the line it lies on, on the nearer of the
+// two lines at the measured distance from a line, on the circle of a distance…
 
-import { sketchFrame, sketchOf } from './solver/initial.js';
+import { sketchFrame, sketchOf, locusSnapper } from './solver/initial.js';
+import { isActive } from './solver/adjust.js';
+import { isValidMeasurement } from './solver/observations.js';
 
 // Returns { frame, positions: Map name → { x, y, placed, parked? } }.
-export function layoutPositions(solution, points) {
+export function layoutPositions(solution, points, measurements = []) {
     const frame = sketchFrame(solution, points);
     const positions = new Map();
     const unsketched = [];
@@ -24,6 +28,11 @@ export function layoutPositions(solution, points) {
         }
         if (!Number.isFinite(minX)) minX = minY = 0;
         unsketched.forEach((name, i) => positions.set(name, { x: minX + 2 * i, y: minY - 3, placed: false, parked: true }));
+    }
+    const placed = new Map([...positions].filter(([, q]) => q.placed).map(([n, q]) => [n, { x: q.x, y: q.y }]));
+    const snap = locusSnapper(measurements.filter(m => isActive(m) && isValidMeasurement(m)), placed);
+    for (const [name, q] of positions) {
+        if (!q.placed) Object.assign(q, snap(name, q));
     }
     return { frame, positions };
 }

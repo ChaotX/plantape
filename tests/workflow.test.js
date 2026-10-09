@@ -22,7 +22,7 @@ class Session {
         const res = snoop(solverInput(this.garden));
         this.solution = this.garden.settings.autoExclude ? res.solution : res.initial;
         this.suspects = res.suspects;
-        ({ frame: this.frame, positions: this.positions } = layoutPositions(this.solution, this.garden.points));
+        ({ frame: this.frame, positions: this.positions } = layoutPositions(this.solution, this.garden.points, this.garden.measurements));
     }
 
     // Plan position of a known point (computed or from the truth table).
@@ -104,6 +104,29 @@ test('a point sketched on the plan is drawn at its sketch until it is fixed', ()
     assert.ok(p && !p.placed && near(p, { x: 11.3, y: 0.4 }, 0.05), fmt(p));
 });
 
+test('a point not fixed yet is drawn on what is known about it, nearest to its sketch', () => {
+    const s = demoSession();
+    // On the wall line: moved straight onto the line.
+    s.sketch('P', 4, 1.2);
+    s.offset(...WALL, 'P', 0);
+    assert.ok(near(s.positions.get('P'), { x: 4, y: 0 }, 0.05), fmt(s.positions.get('P')));
+    assert.equal(s.positions.get('P').placed, false);
+    // 3 m from the wall line: onto the nearer of the two parallels (the sketch is on the +y side).
+    s.sketch('Q', 6, 2.2);
+    s.offset(...WALL, 'Q', 3);
+    assert.ok(near(s.positions.get('Q'), { x: 6, y: 3 }, 0.05), fmt(s.positions.get('Q')));
+    s.move('Q', 6, -1.5);
+    assert.ok(near(s.positions.get('Q'), { x: 6, y: -3 }, 0.05), `dragged across the wall: ${fmt(s.positions.get('Q'))}`);
+    // A single distance from a computed point: onto that circle.
+    s.sketch('R', 3, 3);
+    s.save({ from: 'House NW', fromH: 0, to: 'R', toH: 0, distance: 2 });
+    const r = s.positions.get('R');
+    assert.ok(Math.abs(Math.hypot(r.x, r.y) - 2) < 0.05 && r.x > 0 && r.y > 0, fmt(r));
+    // Moving the sketch along the line moves the drawn point along it, still on the line.
+    s.move('P', 6, 0.8);
+    assert.ok(near(s.positions.get('P'), { x: 6, y: 0 }, 0.05), fmt(s.positions.get('P')));
+});
+
 test('building: on the line twice still waits for a second reading (no jump onto a line end)', () => {
     const s = demoSession();
     s.sketch('B1', 11.3, 0.4);
@@ -111,7 +134,7 @@ test('building: on the line twice still waits for a second reading (no jump onto
     assert.equal(s.point('B1').status, 'unplaced');
     s.offset(...WALL, 'B1', 0); // saved again
     assert.equal(s.point('B1').status, 'unplaced', fmt(s.point('B1')));
-    assert.ok(near(s.positions.get('B1'), { x: 11.3, y: 0.4 }, 0.05), 'still drawn at its sketch');
+    assert.ok(near(s.positions.get('B1'), { x: 11.3, y: 0 }, 0.05), `drawn on the wall line below its sketch: ${fmt(s.positions.get('B1'))}`);
     // A distance from the end of the line fixes it; the sketch picks the side of House NE.
     s.distance('House NE', 'B1');
     assert.ok(near(s.point('B1'), SHED.B1, 0.05), fmt(s.point('B1')));

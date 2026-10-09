@@ -111,7 +111,7 @@ function recompute() {
         ].sort((a, b) => b.score - a.score).slice(0, 8)
         : [];
     state.under = underdeterminedPoints(solution);
-    ({ frame: state.frame, positions: state.positions } = layoutPositions(solution, garden.points));
+    ({ frame: state.frame, positions: state.positions } = layoutPositions(solution, garden.points, garden.measurements));
 }
 
 // Sketch position (sketch frame) for a point created without tapping the plan: next to the point or line

@@ -413,6 +413,43 @@ function pickMaxDegree(graph, names) {
     return best;
 }
 
+// Nearest point to pos on a locus.
+function projectOnLocus(pos, L) {
+    if (L.circle) {
+        const dx = pos.x - L.c.x;
+        const dy = pos.y - L.c.y;
+        const d = Math.hypot(dx, dy);
+        return d < 1e-9 ? { x: L.c.x + L.r, y: L.c.y } : { x: L.c.x + (dx / d) * L.r, y: L.c.y + (dy / d) * L.r };
+    }
+    let best = null;
+    for (const l of L.lines) {
+        const t = (pos.x - l.p.x) * l.u.x + (pos.y - l.p.y) * l.u.y;
+        const q = { x: l.p.x + t * l.u.x, y: l.p.y + t * l.u.y };
+        if (!best || Math.hypot(q.x - pos.x, q.y - pos.y) < Math.hypot(best.x - pos.x, best.y - pos.y)) best = q;
+    }
+    return best;
+}
+
+// For drawing points that are not fixed yet: moves a (sketched) position onto what is known about the
+// point — the line it lies on, the nearer of the two lines at the measured distance from a line, the circle
+// of a single distance… measurements: the usable ones; placed: Map name → { x, y } of computed points.
+// Returns snap(name, pos) → pos (unchanged when no reading ties the point to computed points).
+export function locusSnapper(measurements, placed) {
+    const cons = new Constraints(measurements);
+    return (name, pos) => {
+        const loci = cons.lociFor(name, placed);
+        if (!loci.length) return pos;
+        // Several loci that do not cross (e.g. parallel lines): the projection fitting all of them best.
+        let best = null;
+        for (const L of loci) {
+            const q = projectOnLocus(pos, L);
+            const score = misfit(q, loci) + 1e-6 * Math.hypot(q.x - pos.x, q.y - pos.y);
+            if (!best || score < best.score) best = { q, score };
+        }
+        return best.q;
+    };
+}
+
 // Returns { placed: Map name → {x, y}, origin, axis, order }.
 // Datum: origin at (0,0), axis point on +x, side point (if given) at y > 0. Origin and axis only need
 // to be placed, not linked: the network is trilaterated from its best-braced edge and then moved into
