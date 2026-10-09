@@ -69,7 +69,9 @@ export function autoEllipseScale(solution, pxPerMetre, targetPx = 16) {
     sizes.sort((a, b) => a - b);
     const median = sizes[Math.floor(sizes.length / 2)];
     const raw = targetPx / (median * ELLIPSE_K * pxPerMetre);
-    return raw <= 1 ? 1 : 10 ** Math.round(Math.log10(raw));
+    // At most ×1000 (the largest choice in the ☰ menu): ellipses of points held by exact rules may be next to
+    // nothing, and are then honestly too small to see.
+    return raw <= 1 ? 1 : Math.min(10 ** Math.round(Math.log10(raw)), 1000);
 }
 
 // Text with a white halo, drawn as a separate stroked copy underneath (svg2pdf ignores paint-order).

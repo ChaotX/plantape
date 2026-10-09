@@ -70,6 +70,7 @@ export default {
     stillWeak: '⚠ {name} is placed, but poorly (±{sxy} m): its readings all run one way. Measure {better} to fix it.',
     stillWeakNoHint: '⚠ {name} is placed, but poorly (±{sxy} m): its readings all run one way. Measure it from a point off to the side.',
     weakMarker: '{name}: not fixed along the arrow (±{sxy} m). Its readings all run one way; measure it from a point off to the side.',
+    notFixedHelp: 'Not fixed by the readings: where they leave it free, it stays where it was sketched.',
     sketchedOnly: 'sketched only, not measured yet',
     pointMoved: '{name} moved to the matching position.',
     pointFixed: '{name} is fixed by its measurements; the sketch does not change it.',

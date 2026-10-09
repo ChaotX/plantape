@@ -110,6 +110,11 @@ function demoSession() {
     return new Session(g, SHED);
 }
 
+
+// Not fixed by the readings: drawn where they allow nearest the sketch, with a large uncertainty (or, without a
+// sketch to start from, not computed at all).
+const notFixed = p => !p?.placed || p.sxy > 0.5;
+
 test('a point sketched on the plan is drawn at its sketch until it is fixed', () => {
     const s = demoSession();
     s.sketch('B1', 11.3, 0.4);
@@ -123,7 +128,7 @@ test('a point not fixed yet is drawn on what is known about it, nearest to its s
     s.sketch('P', 4, 1.2);
     s.offset(...WALL, 'P', 0);
     assert.ok(near(s.positions.get('P'), { x: 4, y: 0 }, 0.05), fmt(s.positions.get('P')));
-    assert.equal(s.positions.get('P').placed, false);
+    assert.ok(notFixed(s.point('P')));
     // 3 m from the wall line: onto the nearer of the two parallels (the sketch is on the +y side).
     s.sketch('Q', 6, 2.2);
     s.offset(...WALL, 'Q', 3);
@@ -144,9 +149,9 @@ test('building: on the line twice still waits for a second reading (no jump onto
     const s = demoSession();
     s.sketch('B1', 11.3, 0.4);
     s.offset(...WALL, 'B1', 0);
-    assert.equal(s.point('B1').status, 'unplaced');
+    assert.ok(notFixed(s.point('B1')));
     s.offset(...WALL, 'B1', 0); // saved again
-    assert.equal(s.point('B1').status, 'unplaced', fmt(s.point('B1')));
+    assert.ok(notFixed(s.point('B1')), fmt(s.point('B1')));
     assert.ok(near(s.positions.get('B1'), { x: 11.3, y: 0 }, 0.05), `drawn on the wall line below its sketch: ${fmt(s.positions.get('B1'))}`);
     // A distance from the end of the line fixes it; the sketch picks the side of House NE.
     s.distance('House NE', 'B1');
@@ -166,13 +171,13 @@ test('building: corners on the line, a side at a distance from it, square corner
     // Second corner on the same line, one side length away.
     s.sketch('B2', 15.2, -0.3);
     s.offset(...WALL, 'B2', 0);
-    assert.equal(s.point('B2').status, 'unplaced');
+    assert.ok(notFixed(s.point('B2')));
     s.distance('B1', 'B2');
     assert.ok(near(s.point('B2'), SHED.B2, 0.05), fmt(s.point('B2')));
     // Third corner: 3 m from the wall line and square to B1–B2 at B2.
     s.sketch('B3', 15.8, 2.6);
     s.offset(...WALL, 'B3');
-    assert.equal(s.point('B3').status, 'unplaced', 'one reading is not enough');
+    assert.ok(notFixed(s.point('B3')), 'one reading is not enough');
     assert.ok(s.positions.get('B3'), 'but it is drawn at its sketch');
     s.distance('B2', 'B3');
     assert.equal(s.angle('B1', 'B2', 'B2', 'B3', 90), 90);
@@ -215,8 +220,8 @@ test('points with only readings from lines and between each other wait, then fol
     s.offset(...WALL, 'B4');
     s.distance('B3', 'B4');
     for (const n of ['B3', 'B4']) {
-        assert.equal(s.point(n).status, 'unplaced', n);
-        assert.ok(s.positions.get(n) && !s.positions.get(n).placed, `${n} drawn at its sketch`);
+        assert.ok(notFixed(s.point(n)), n);
+        assert.ok(s.positions.get(n), `${n} drawn`);
     }
     // Tying B3 to B2 fixes B3 (the sketch picks the side), and then B4 follows.
     s.distance('B2', 'B3');
@@ -276,7 +281,7 @@ test('k1–k4: dragging any point moves the whole network to the matching soluti
     at('k2', NE.x + 6, 0);
     s.save({ from: 'k2', fromH: 0, to: 'k3', toH: 0, distance: 4 });
     at('k3', NE.x + 5.9, 4, 0.2); // on the 4 m circle around k2, nearest its sketch
-    assert.equal(s.positions.get('k3').placed, false);
+    assert.ok(notFixed(s.point('k3')));
 
     // Drag k2 left of House NE: only possible with k1 on the other side of House NE too.
     s.move('k2', 7, 0.3);

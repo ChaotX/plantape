@@ -7,6 +7,7 @@ import { PAPERS, SCALES } from '../export.js';
 import { kindOf } from '../solver/observations.js';
 import { lineLabel, lineKey, lineEnds } from './describe.js';
 import { isPointShown, isMeasurementDrawn, isLineDrawn } from '../model.js';
+import { WEAK_SXY } from '../solver/planner.js';
 
 // Show / hide on the plan.
 const eye = (shown, attrs, onTitle, offTitle) =>
@@ -46,7 +47,7 @@ export class PointsPanel {
                     <td>${eye(isPointShown(byName.get(name)), `data-name="${escapeHtml(name)}"`, 'shownOnPlan', 'hiddenOnPlan')}</td>
                     <td><span class="dot" style="background:${CATEGORY_COLORS[cats.get(name)] || CATEGORY_COLORS.other}"></span>${escapeHtml(name)}${p.status === 'datum' ? ' <small>◆</small>' : ''}</td>
                     ${p.placed ? `<td class="num">${fmt(p.x)}</td><td class="num">${fmt(p.y)}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.zMeasured ? '' : '~'}${fmt(p.z)}</td>` : ''}
-                    <td class="num">${p.status === 'datum' && !(p.sxy > 0) ? '0' : fmt(p.sxy * 100, 1) + ' cm'}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.status === 'datum' && !(p.sz > 0) ? '0' : fmt(p.sz * 100, 1) + ' cm'}</td>` : ''}`
+                    <td class="num">${p.status === 'datum' && !(p.sxy > 0) ? '0' : p.sxy > WEAK_SXY ? `<span title="${escapeHtml(t('notFixedHelp'))}">?</span>` : fmt(p.sxy * 100, 1) + ' cm'}</td>${z ? `<td class="num${p.zMeasured ? '' : ' muted'}">${p.status === 'datum' && !(p.sz > 0) ? '0' : fmt(p.sz * 100, 1) + ' cm'}</td>` : ''}`
                     : `<td colspan="${z ? 5 : 3}" class="muted">${escapeHtml(t('notPlaced'))}</td>`}
                     <td class="num">${p.links}${p.status === 'weak' ? ' ⚠' : ''}</td>
                     <td><button type="button" class="tiny delete" data-action="delete" data-name="${escapeHtml(name)}" title="${escapeHtml(t('delete'))}">🗑</button></td>

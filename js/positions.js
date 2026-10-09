@@ -7,8 +7,10 @@
 import { sketchFrame, sketchOf, locusSnapper } from './solver/initial.js';
 import { isActive } from './solver/adjust.js';
 import { isValidMeasurement } from './solver/observations.js';
+import { WEAK_SXY } from './solver/planner.js';
 
-// Returns { frame, positions: Map name → { x, y, placed, parked? } }.
+// Returns { frame, positions: Map name → { x, y, placed, free?, parked? } }; free: computed, but where the
+// readings leave it free it is held by its sketch.
 export function layoutPositions(solution, points, measurements = []) {
     const frame = sketchFrame(solution, points);
     const positions = new Map();
@@ -16,7 +18,7 @@ export function layoutPositions(solution, points, measurements = []) {
     for (const p of points) {
         const r = solution?.points?.get(p.name);
         const sketch = sketchOf(p);
-        if (r?.placed) positions.set(p.name, { x: r.x, y: r.y, placed: true });
+        if (r?.placed) positions.set(p.name, { x: r.x, y: r.y, placed: true, free: r.sxy > WEAK_SXY });
         else if (sketch) positions.set(p.name, { ...frame.apply(sketch), placed: false });
         else unsketched.push(p.name);
     }
@@ -53,13 +55,14 @@ export function freeSpotNear(around, positions, radius = 2) {
 
 // After a drag changed the network's mirror choices: new sketch positions (plan frame) for the points that
 // moved with it, so their sketches keep matching and the next recompute does not flip them back. Computed
-// points get their new position; points not fixed yet move along with the computed points they are tied to.
+// points get their new position; points not fixed yet (or held by their sketch where the readings leave them
+// free) move along with the computed points they are tied to.
 // Returns Map name → { x, y }.
 export function followSketches(before, after, points, measurements, moved, threshold = 0.3) {
     const shift = new Map();
     for (const [name, q] of after) {
         const p = before.get(name);
-        if (!q.placed || !p?.placed) continue;
+        if (!q.placed || !p?.placed || q.free || p.free) continue;
         if (Math.hypot(q.x - p.x, q.y - p.y) > threshold) shift.set(name, { dx: q.x - p.x, dy: q.y - p.y });
     }
     const out = new Map();
@@ -76,7 +79,7 @@ export function followSketches(before, after, points, measurements, moved, thres
         }
     }
     for (const [name, q] of before) {
-        if (name === moved || q.placed || !sketched.has(name)) continue;
+        if (name === moved || (q.placed && !q.free) || !sketched.has(name)) continue;
         const ds = [...(partners.get(name) || [])].map(n => shift.get(n)).filter(Boolean);
         if (!ds.length) continue;
         const dx = ds.reduce((s, d) => s + d.dx, 0) / ds.length;

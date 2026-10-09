@@ -45,16 +45,22 @@ test('points that only the readings together fix are placed, starting from the s
     }
 });
 
-test('a point the readings do not fix keeps waiting', () => {
+test('a point the readings do not fix is drawn where they allow, nearest its sketch, and marked free', () => {
     const g = garden();
     // Ház4 loses both the angles at its corners that tie it down, keeping one: it can slide along a line.
     g.measurements = g.measurements.filter(m => !(m.kind === 'angle' && [m.from, m.fromB, m.to, m.toB].filter(n => n === 'Ház4').length && m.id !== 'm1'));
-    const P = snoop(solverInput(g)).solution.points;
-    assert.equal(P.get('Ház4').placed, false);
-    assert.ok(P.get('Ház3').placed && P.get('K3').placed);
+    const res = snoop(solverInput(g));
+    const P = res.solution.points;
+    assert.deepEqual(res.suspects, []);
+    assert.ok(P.get('Ház4').placed && P.get('Ház4').status === 'weak' && P.get('Ház4').sxy > 10, 'free, held by the sketch');
+    // The one angle left still holds: Ház4 is on the line through Ház3 square to Ház2–Ház3.
+    const [h2, h3, h4] = ['Ház2', 'Ház3', 'Ház4'].map(n => P.get(n));
+    const dot = (h3.x - h2.x) * (h4.x - h3.x) + (h3.y - h2.y) * (h4.y - h3.y);
+    assert.ok(Math.abs(dot) < 1e-3 * Math.hypot(h3.x - h2.x, h3.y - h2.y) * Math.hypot(h4.x - h3.x, h4.y - h3.y), 'square at Ház3');
+    for (const n of ['Ház3', 'K3']) assert.ok(P.get(n).sxy < 0.5, `${n} fixed`);
 });
 
-test('a house and a fence joined by one distance: a whole group is placed, not just the joining pair', () => {
+test('a house and a fence joined by one distance: both keep their shape, the free one is marked free', () => {
     // House H1–H4 and fence F1–F4 are rectangles of lines and square corners with their sides measured; the
     // only reading between them is H2–F1, so the house can still swing around F1.
     const P = { H1: [10, 5], H2: [20, 5], H3: [20, 16], H4: [10, 16], F1: [24, 2], F2: [24, 37], F3: [-16, 37], F4: [-16, 2] };
@@ -66,6 +72,16 @@ test('a house and a fence joined by one distance: a whole group is placed, not j
         ...rect(['H1', 'H2', 'H3', 'H4']), ...rect(['F1', 'F2', 'F3', 'F4']),
         ...[['H1', 'H2'], ['H2', 'H3'], ['F4', 'F1'], ['F3', 'F2'], ['F2', 'F1'], ['H2', 'F1']].map(([from, to]) => ({ from, to, fromH: 0, toH: 0, distance: len(from, to) }))
     ].map((m, i) => ({ id: `m${i}`, status: 'active', ...m }));
-    const placed = [...snoop(solverInput(g)).solution.points].filter(([, p]) => p.placed).map(([n]) => n).sort();
-    assert.ok(['F1,F2,F3,F4', 'H1,H2,H3,H4'].includes(placed.join(',')), placed.join(','));
+    const res = snoop(solverInput(g));
+    const S = res.solution.points;
+    assert.deepEqual(res.suspects, []);
+    for (const n of Object.keys(P)) assert.ok(S.get(n).placed, `${n} placed`);
+    // Both rectangles keep their shape (distances never measured between these corners).
+    const d = (a, b) => Math.hypot(S.get(a).x - S.get(b).x, S.get(a).y - S.get(b).y);
+    for (const [a, b] of [['H1', 'H3'], ['H2', 'H4'], ['F1', 'F3'], ['F2', 'F4']]) assert.ok(Math.abs(d(a, b) - len(a, b)) < 0.05, `${a}–${b}`);
+    assert.ok(Math.abs(d('H2', 'F1') - len('H2', 'F1')) < 0.01);
+    // One group is fixed, the other can still swing around F1: it is marked free.
+    const free = Object.keys(P).filter(n => S.get(n).sxy > 0.5).sort().join(',');
+    // (A datum point of the free group, held at the origin or on the axis, is not counted.)
+    assert.ok(['F1,F2,F3,F4', 'F2,F3,F4', 'H1,H2,H3,H4', 'H1,H3,H4'].includes(free), free);
 });

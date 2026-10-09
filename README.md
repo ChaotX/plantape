@@ -189,8 +189,16 @@ keep your own data there.
   - Without a side point, the drawing is mirrored to match the sketch once three placed points have one.
   - Some points can only be fixed together: each one's second reading is an angle or a distance from a line
     through another point that is not placed yet (a rectangle tied to a fence by angles). Such a group is
-    solved jointly, starting from the sketched positions, which also pick the solution meant. A point is kept
-    only when the readings fix it; otherwise it keeps waiting.
+    solved jointly, starting from the sketched positions, which also pick the solution meant.
+- **Starting from the sketch.** Like a CAD sketcher, every sketched point with a reading is computed, also when
+  the readings do not fix it completely. The points the placement above cannot fix start at their sketch
+  (mapped onto the placed points), and every point is pulled weakly (σ 2 m) towards its sketch through a
+  fitted similarity, so the sketch's size and turn do not matter. The readings move a point only as far as
+  they need; what they leave free (a house that can still swing around one corner, a gate that can slide
+  along its fence) stays as sketched. The solve runs in three steps: rules with an ordinary tolerance, then
+  exact, then pinned (σ 30 m) where that left the points, so the readings are met exactly and the sketch
+  never counts as a reading that disagrees. Uncertainties are computed with the pull made negligible, so such
+  a point shows as not fixed: a "?" arrow along the direction it is free in, "?" in the points table.
   - Heights are then initialised from the height-offset measurements.
 - **Adjustment.**
   - Levenberg–Marquardt with the full Newton curvature of the distance function. Without it, convergence

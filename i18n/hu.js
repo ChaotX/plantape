@@ -70,6 +70,7 @@ export default {
     stillWeak: '⚠ {name} elhelyezve, de bizonytalanul (±{sxy} m): minden mérése egy irányba fut. Mérd meg ezt: {better}.',
     stillWeakNoHint: '⚠ {name} elhelyezve, de bizonytalanul (±{sxy} m): minden mérése egy irányba fut. Mérd meg egy oldalt fekvő pontból.',
     weakMarker: '{name}: a nyíl irányában nincs rögzítve (±{sxy} m). Minden mérése egy irányba fut; mérd egy oldalt fekvő pontból.',
+    notFixedHelp: 'A mérések nem rögzítik: ahol szabadon hagyják, ott marad, ahová rajzolták.',
     sketchedOnly: 'csak felvázolva, még nincs mérve',
     pointMoved: '{name} átkerült a megfelelő helyzetbe.',
     pointFixed: '{name} helyzetét a mérései rögzítik; a vázlat nem változtat rajta.',
