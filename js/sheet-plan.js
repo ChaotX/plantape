@@ -2,7 +2,7 @@
 // shows the last computed state of the garden without the app. Points carry their names as labels; measured
 // distances are drawn as line segments (lines of the plan solid, helper lines dashed).
 
-import { isMeasurementDrawn } from './model.js';
+import { isMeasurementDrawn, isLineDrawn } from './model.js';
 import { kindOf } from './solver/observations.js';
 import { pairKey } from './solver/planner.js';
 
@@ -17,9 +17,9 @@ const PAD_H = 120;
 
 const round = v => Math.round(v * 1000) / 1000;
 
-// labels: { x, points, lines, helpers }. Returns { rows, points, bounds } where rows start with the header
+// labels: { x, points, lines, helpers }; lines: lines without a reading. Returns { rows, points, bounds } where rows start with the header
 // row; each segment is two rows followed by an empty one, which breaks the line there.
-export function planTable(solution, measurements, labels) {
+export function planTable(solution, measurements, labels, lines = []) {
     const placed = [...solution.points].filter(([, p]) => p.placed);
     const at = new Map(placed);
     const rows = [[labels.x, labels.points, labels.lines, labels.helpers, '']];
@@ -30,6 +30,11 @@ export function planTable(solution, measurements, labels) {
         if (kindOf(m) !== 'distance' || m.status === 'excluded' || !at.has(m.from) || !at.has(m.to) || m.from === m.to) continue;
         const key = pairKey(m.from, m.to);
         segments.set(key, segments.get(key) || isMeasurementDrawn(m));
+    }
+    for (const l of lines) {
+        if (!at.has(l.from) || !at.has(l.to)) continue;
+        const key = pairKey(l.from, l.to);
+        segments.set(key, segments.get(key) || isLineDrawn(l));
     }
     let drawn = 0;
     let helpers = 0;

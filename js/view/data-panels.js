@@ -5,8 +5,8 @@ import { escapeHtml, fmt, debounce } from '../util.js';
 import { CATEGORY_COLORS } from './plan-view.js';
 import { PAPERS, SCALES } from '../export.js';
 import { kindOf } from '../solver/observations.js';
-import { lineLabel } from './describe.js';
-import { isPointShown, isMeasurementDrawn } from '../model.js';
+import { lineLabel, lineKey, lineEnds } from './describe.js';
+import { isPointShown, isMeasurementDrawn, isLineDrawn } from '../model.js';
 
 // Show / hide on the plan.
 const eye = (shown, attrs, onTitle, offTitle) =>
@@ -61,11 +61,13 @@ export class MeasurementsPanel {
         this.app = app;
         el.addEventListener('click', e => {
             const vis = e.target.closest('[data-action="visible"]');
-            if (vis) app.actions.toggleVisible({ measurement: vis.dataset.id });
+            if (vis?.dataset.line) app.actions.toggleVisible({ line: lineEnds(vis.dataset.line) });
+            else if (vis) app.actions.toggleVisible({ measurement: vis.dataset.id });
             const btn = e.target.closest('[data-action="toggle"]');
             if (btn) app.actions.toggleMeasurement(btn.dataset.id);
             const del = e.target.closest('[data-action="delete"]');
-            if (del) app.actions.deleteMeasurement(del.dataset.id);
+            if (del?.dataset.line) app.actions.deleteLine(...lineEnds(del.dataset.line));
+            else if (del) app.actions.deleteMeasurement(del.dataset.id);
         });
     }
 
@@ -74,7 +76,16 @@ export class MeasurementsPanel {
         if (!garden || !result) return;
         const suspects = new Set((result.suspects || []).map(s => s.id));
         const list = garden.measurements.slice().reverse();
-        this.el.innerHTML = list.length ? `<div class="table-wrap"><table class="data">
+        const lines = garden.lines || [];
+        const linesHtml = lines.length ? `<h4>${escapeHtml(t('linesSection'))}</h4>
+            <p class="muted small">${escapeHtml(t('linesHelp'))}</p>
+            <ul class="history">${lines.map(l => {
+                const key = escapeHtml(lineKey(l.from, l.to));
+                return `<li><span>${escapeHtml(lineLabel(l.from, l.to))}</span>
+                    ${eye(isLineDrawn(l), `data-line="${key}"`, 'drawnOnPlan', 'hiddenOnPlan')}
+                    <button type="button" class="tiny delete" data-action="delete" data-line="${key}" title="${escapeHtml(t('delete'))}">🗑</button></li>`;
+            }).join('')}</ul>` : '';
+        this.el.innerHTML = (list.length ? `<div class="table-wrap"><table class="data">
             <thead><tr><th></th><th>${escapeHtml(t('colFrom'))}</th><th>${escapeHtml(t('colTo'))}</th><th>d [m]</th><th>v [mm]</th><th>w</th><th></th><th></th></tr></thead>
             <tbody>${list.map(m => {
                 const r = result.solution.measurements.get(m.id) || {};
@@ -96,7 +107,7 @@ export class MeasurementsPanel {
                     <td><button type="button" class="tiny delete" data-action="delete" data-id="${escapeHtml(m.id)}" title="${escapeHtml(t('delete'))}">🗑</button></td>
                 </tr>`;
             }).join('')}</tbody></table></div>
-            <p class="muted small">${escapeHtml(t('measurementsLegend'))}</p>` : `<p class="muted">${escapeHtml(t('noMeasurements'))}</p>`;
+            <p class="muted small">${escapeHtml(t('measurementsLegend'))}</p>` : `<p class="muted">${escapeHtml(t('noMeasurements'))}</p>`) + linesHtml;
     }
 }
 

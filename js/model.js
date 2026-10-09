@@ -7,14 +7,16 @@ export const TABS = {
     points: 'Points',
     measurements: 'Measurements',
     settings: 'Settings',
-    blocked: 'Blocked'
+    blocked: 'Blocked',
+    lines: 'Lines'
 };
 
 export const HEADERS = {
     points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status', 'sketch_x', 'sketch_y', 'visible'],
     measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note', 'kind', 'from_b', 'to_b', 'visible'],
     settings: ['key', 'value'],
-    blocked: ['from', 'to', 'note']
+    blocked: ['from', 'to', 'note'],
+    lines: ['from', 'to', 'visible', 'note']
 };
 
 export const CATEGORIES = ['building', 'tree', 'shrub', 'fence', 'path', 'water', 'other'];
@@ -39,7 +41,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export function emptyGarden(name = '') {
-    return { points: [], measurements: [], settings: { ...DEFAULT_SETTINGS, gardenName: name }, blocked: [], warnings: [] };
+    return { points: [], measurements: [], lines: [], settings: { ...DEFAULT_SETTINGS, gardenName: name }, blocked: [], warnings: [] };
 }
 
 function num(value, fallback = 0) {
@@ -83,6 +85,15 @@ export function isPointShown(p) {
 
 export function isMeasurementDrawn(m) {
     return m?.visible === true;
+}
+
+// A line without a reading ({ from, to, visible }) is drawn on purpose, so it is a line of the plan unless hidden.
+export function isLineDrawn(l) {
+    return l?.visible !== false;
+}
+
+export function lineToRecord(l) {
+    return { from: l.from, to: l.to, visible: flagCell(l.visible), note: l.note || '' };
 }
 
 const flagCell = v => (v === true ? true : v === false ? false : '');
@@ -152,8 +163,8 @@ export function settingsToRows(settings) {
     });
 }
 
-// Parses the four tabs' raw values into a garden. rowRefs keeps sheet row numbers for write-back.
-export function gardenFromTables({ points, measurements, settings, blocked }) {
+// Parses the tabs' raw values into a garden. rowRefs keeps sheet row numbers for write-back.
+export function gardenFromTables({ points, measurements, settings, blocked, lines = [] }) {
     const garden = emptyGarden();
     const warnings = garden.warnings;
 
@@ -228,6 +239,28 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
         garden.measurements.push(m);
     }
 
+    // Lines without a reading: two points that form a wall, fence or side, usable in angles and offsets.
+    const ls = tableToRecords(lines);
+    const pairs = new Set();
+    for (const { record } of ls.rows) {
+        const from = String(record.from ?? '').trim();
+        const to = String(record.to ?? '').trim();
+        const key = from < to ? `${from}|${to}` : `${to}|${from}`;
+        if (!from || !to || from === to || pairs.has(key)) continue;
+        pairs.add(key);
+        for (const name of [from, to]) {
+            if (!seen.has(name)) {
+                seen.add(name);
+                garden.points.push({ name, category: '', notes: '' });
+                warnings.push({ key: 'warnImplicitPoint', params: { name } });
+            }
+        }
+        const line = { from, to, note: String(record.note ?? '') };
+        const lv = parseFlag(record.visible);
+        if (lv !== undefined) line.visible = lv;
+        garden.lines.push(line);
+    }
+
     garden.settings = parseSettings(tableToRecords(settings).rows);
     garden.blocked = tableToRecords(blocked).rows
         .map(({ record }) => ({ a: String(record.from ?? '').trim(), b: String(record.to ?? '').trim() }))
@@ -235,7 +268,8 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
     garden.headers = {
         points: pts.headers.length ? pts.headers : HEADERS.points,
         measurements: ms.headers.length ? ms.headers : HEADERS.measurements,
-        blocked: tableToRecords(blocked).headers.length ? tableToRecords(blocked).headers : HEADERS.blocked
+        blocked: tableToRecords(blocked).headers.length ? tableToRecords(blocked).headers : HEADERS.blocked,
+        lines: ls.headers.length ? ls.headers : HEADERS.lines
     };
     return garden;
 }
@@ -272,12 +306,13 @@ export function datumToKeep(settings, solution) {
 // ---- Local file formats -------------------------------------------------------------------------
 
 export function gardenToJson(garden) {
-    const { points, measurements, settings, blocked } = garden;
+    const { points, measurements, lines = [], settings, blocked } = garden;
     return JSON.stringify({
         format: 'plantape-garden',
         version: 1,
         points,
         measurements: measurements.map(({ needsId, ...m }) => m),
+        lines,
         settings,
         blocked
     }, null, 2);
@@ -289,6 +324,7 @@ export function gardenFromJson(text) {
     const garden = emptyGarden();
     garden.points = data.points || [];
     garden.measurements = data.measurements || [];
+    garden.lines = data.lines || [];
     garden.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
     garden.blocked = data.blocked || [];
     return garden;

@@ -45,3 +45,9 @@ test('plan frame keeps metres per pixel equal on both axes', () => {
 test('no chart before any point is placed', () => {
     assert.equal(planChart(1, planTable({ points: new Map() }, [], labels), labels), null);
 });
+
+test('lines without a reading are drawn too, unless a measurement already draws the pair', () => {
+    const table = planTable(solution, ms, labels, [{ from: 'A', to: 'C' }, { from: 'B', to: 'A', visible: false }, { from: 'A', to: 'X' }]);
+    assert.equal(table.drawn, 2, 'A–B (measured, drawn) and A–C');
+    assert.equal(table.helpers, 1, 'B–C');
+});

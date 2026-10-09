@@ -53,6 +53,7 @@ export function availableLines(garden) {
             if (k === 'angle') add(m.to, m.toB);
         }
     }
+    for (const l of garden.lines || []) add(l.from, l.to);
     return [...out.values()].sort((p, q) => lineLabel(...p).localeCompare(lineLabel(...q)));
 }
 

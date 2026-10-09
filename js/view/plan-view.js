@@ -4,7 +4,7 @@ import { escapeHtml, fmt } from '../util.js';
 import { t } from '../i18n.js';
 import { kindOf } from '../solver/observations.js';
 import { isLine, lineEnds, lineKey } from './describe.js';
-import { isPointShown, isMeasurementDrawn } from '../model.js';
+import { isPointShown, isMeasurementDrawn, isLineDrawn } from '../model.js';
 
 export const CATEGORY_COLORS = {
     building: '#8d6e63',
@@ -160,6 +160,19 @@ export function renderScene(scene, tf, style) {
         for (const { a, b, lo, hi } of refs.values()) {
             const at = t => ({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) });
             out.push(seg(at(lo - 0.03), at(hi + 0.03), '#8d6e63', sw * 1.4, ` stroke-dasharray="${sw * 8} ${sw * 3}" opacity="0.7"`));
+        }
+
+        // Lines without a reading (walls, fences, sides drawn with the line tool).
+        for (const l of garden.lines || []) {
+            const drawn = isLineDrawn(l);
+            if (drawn ? options.lines === false : options.hiddenLines === false) continue;
+            if (!knownAll([l.from, l.to])) continue;
+            const a = at(l.from);
+            const b = at(l.to);
+            // Helper lines without a reading are dash-dotted, unlike measured ones; not yet computed: faint at the sketches.
+            const extra = !placedAll([l.from, l.to]) ? pendingStyle : drawn ? '' : ` stroke-dasharray="${sw * 6} ${sw * 2} ${sw} ${sw * 2}"`;
+            out.push(seg(a, b, drawn ? '#37474f' : '#90a4ae', drawn ? sw * 2.2 : sw, extra));
+            if (style.hit) out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="transparent" stroke-width="${style.hit * 0.9}" data-line="${escapeHtml(lineKey(l.from, l.to))}" style="cursor:pointer"><title>${escapeHtml(`${l.from}–${l.to}`)}</title></line>`);
         }
 
         for (const m of garden.measurements) {

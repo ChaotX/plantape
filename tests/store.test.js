@@ -439,3 +439,24 @@ test('write-back adds the Plan tab with the app link and one chart', async () =>
     assert.equal(chart.chartType, 'SCATTER');
     assert.equal(chart.series.length, 3, 'points, the drawn line A–B and helper lines');
 });
+
+test('lines without a reading: add, hide, delete, and an old sheet gets the Lines tab', async () => {
+    const store = await seededStore();
+    await store.addLine({ from: 'A', to: 'D', visible: true });
+    await store.addLine({ from: 'D', to: 'A', visible: true }); // same line: ignored
+    assert.equal(store.garden.lines.length, 1);
+    await store.updateLine('D', 'A', { visible: false });
+    let rows = sheetRows(store.id, 'Lines');
+    assert.deepEqual(rows[1].slice(0, 3), ['A', 'D', false]);
+    await store.addLine({ from: 'B', to: 'C' });
+    const again = await new GoogleStore(store.id).load();
+    assert.deepEqual(again.lines.map(l => [l.from, l.to, l.visible]), [['A', 'D', false], ['B', 'C', undefined]]);
+    await store.deleteLine('D', 'A');
+    rows = sheetRows(store.id, 'Lines');
+    assert.deepEqual(rows.slice(1).map(r => r.slice(0, 2)), [['B', 'C']]);
+
+    books.set('old', { title: 'Old', sheets: new Map([['Measurements', [['from', 'to', 'distance'], ['A', 'B', 3]]]]) });
+    const old = await new GoogleStore('old').load();
+    assert.deepEqual(old.lines, []);
+    assert.ok(books.get('old').sheets.has('Lines'));
+});

@@ -397,6 +397,7 @@ export class MeasurePanel {
                     ${tail}
                     <div class="row">
                         <button type="button" class="primary grow" data-action="save">${escapeHtml(t('saveMeasurement'))}</button>
+                        <button type="button" data-action="lineOnly" title="${escapeHtml(t('lineOnlyHelp'))}">${escapeHtml(t('lineOnly'))}</button>
                         <button type="button" class="ghost" data-action="block" title="${escapeHtml(t('blockHelp'))}">${escapeHtml(t('markBlocked'))}</button>
                     </div>
                 </div>`;
@@ -598,6 +599,8 @@ export class MeasurePanel {
             this.app.actions.toggleVisible({ measurement: btn.dataset.id });
         } else if (action === 'delete') {
             this.app.actions.deleteMeasurement(btn.dataset.id);
+        } else if (action === 'lineOnly') {
+            this.app.actions.addLine(this.ui.station, this.ui.target);
         }
     }
 

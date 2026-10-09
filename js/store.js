@@ -3,7 +3,7 @@
 
 import {
     TABS, HEADERS, emptyGarden, gardenFromTables, gardenFromJson, gardenToJson, recordToRow,
-    pointToRecord, measurementToRecord, settingsToRows, DEFAULT_SETTINGS
+    pointToRecord, measurementToRecord, lineToRecord, settingsToRows, DEFAULT_SETTINGS
 } from './model.js';
 import * as sheets from './sheets-api.js';
 import { HttpError, quoteSheet, columnLetter } from './sheets-api.js';
@@ -26,6 +26,8 @@ export function forgetGarden(type, id) {
     storage.set(RECENT_KEY, recentGardens().filter(g => !(g.type === type && g.id === id)));
     if (type === 'local') storage.remove(`plantape:local:${id}`);
 }
+
+const samePair = (l, m) => (l.from === m.from && l.to === m.to) || (l.from === m.to && l.to === m.from);
 
 function applyOp(garden, op) {
     switch (op.type) {
@@ -50,6 +52,18 @@ function applyOp(garden, op) {
             break;
         case 'deletePoint':
             garden.points = garden.points.filter(p => p.name !== op.name);
+            break;
+        case 'addLine':
+            garden.lines ||= [];
+            if (!garden.lines.some(l => samePair(l, op.line))) garden.lines.push({ ...op.line });
+            break;
+        case 'updateLine': {
+            const l = (garden.lines || []).find(x => samePair(x, op.line));
+            if (l) Object.assign(l, op.changes);
+            break;
+        }
+        case 'deleteLine':
+            garden.lines = (garden.lines || []).filter(l => !samePair(l, op.line));
             break;
         case 'addBlocked':
             garden.blocked.push({ a: op.a, b: op.b });
@@ -117,6 +131,20 @@ class BaseStore {
     // Only the point itself; the caller deletes the measurements that use it first.
     deletePoint(name) {
         return this.mutate({ type: 'deletePoint', name });
+    }
+
+    // line: { from, to, visible }; a line without a reading.
+    addLine(line) {
+        if ((this.garden.lines || []).some(l => samePair(l, line))) return Promise.resolve();
+        return this.mutate({ type: 'addLine', line });
+    }
+
+    updateLine(from, to, changes) {
+        return this.mutate({ type: 'updateLine', line: { from, to }, changes });
+    }
+
+    deleteLine(from, to) {
+        return this.mutate({ type: 'deleteLine', line: { from, to } });
     }
 
     addBlocked(a, b) {
@@ -216,7 +244,8 @@ export class GoogleStore extends BaseStore {
             { title: TABS.points, rows: [HEADERS.points] },
             { title: TABS.measurements, rows: [HEADERS.measurements] },
             { title: TABS.settings, rows: [HEADERS.settings, ...settingsToRows({ ...DEFAULT_SETTINGS, gardenName: name })] },
-            { title: TABS.blocked, rows: [HEADERS.blocked] }
+            { title: TABS.blocked, rows: [HEADERS.blocked] },
+            { title: TABS.lines, rows: [HEADERS.lines] }
         ];
         const res = await sheets.createSpreadsheet(`PlanTape – ${name}`, tabs);
         return new GoogleStore(res.spreadsheetId);
@@ -237,8 +266,8 @@ export class GoogleStore extends BaseStore {
             }
             await sheets.addTabs(this.id, missing);
             if (missing.length) this.sheetIds = null; // read again when a row is deleted
-            const [points, measurements, settings, blocked] = await sheets.batchGet(this.id, Object.values(TABS).map(quoteSheet));
-            this.garden = gardenFromTables({ points, measurements, settings, blocked });
+            const [points, measurements, settings, blocked, lines] = await sheets.batchGet(this.id, Object.values(TABS).map(quoteSheet));
+            this.garden = gardenFromTables({ points, measurements, settings, blocked, lines });
             if (!this.garden.settings.gardenName) this.garden.settings.gardenName = this.sheetTitle;
             this.saveCache();
             this.offlineLoaded = false;
@@ -363,6 +392,22 @@ export class GoogleStore extends BaseStore {
                 if (row) await this.deleteRow(TABS.points, row);
                 break;
             }
+            case 'addLine':
+                await sheets.appendRows(this.id, TABS.lines, [recordToRow(this.headers('lines'), lineToRecord(op.line))]);
+                break;
+            case 'updateLine': {
+                const row = await this.findLineRow(op.line);
+                if (!row || !('visible' in op.changes)) break;
+                const col = await this.ensureColumn('lines', TABS.lines, 'visible');
+                const record = lineToRecord({ ...op.line, ...op.changes });
+                await sheets.batchUpdateValues(this.id, [{ range: `${quoteSheet(TABS.lines)}!${columnLetter(col)}${row}`, values: [[record.visible]] }]);
+                break;
+            }
+            case 'deleteLine': {
+                const row = await this.findLineRow(op.line);
+                if (row) await this.deleteRow(TABS.lines, row);
+                break;
+            }
             default:
                 break;
         }
@@ -386,6 +431,16 @@ export class GoogleStore extends BaseStore {
         const letter = columnLetter(nameCol);
         const [values] = await sheets.batchGet(this.id, [`${quoteSheet(TABS.points)}!${letter}:${letter}`]);
         const idx = values.findIndex((row, i) => i > 0 && String(row[0] ?? '').trim() === name);
+        return idx >= 0 ? idx + 1 : null;
+    }
+
+    // 1-based row of a line (either direction), or null.
+    async findLineRow(line) {
+        const headers = this.headers('lines');
+        const [fromCol, toCol] = [headers.indexOf('from'), headers.indexOf('to')];
+        if (fromCol < 0 || toCol < 0) return null;
+        const [values] = await sheets.batchGet(this.id, [quoteSheet(TABS.lines)]);
+        const idx = values.findIndex((row, i) => i > 0 && samePair({ from: String(row[fromCol] ?? '').trim(), to: String(row[toCol] ?? '').trim() }, line));
         return idx >= 0 ? idx + 1 : null;
     }
 
@@ -516,7 +571,7 @@ export class GoogleStore extends BaseStore {
             const res = await sheets.batchUpdate(this.id, [{ addSheet: { properties: { title: PLAN_TAB, index: 0 } } }]);
             sheetId = res?.replies?.[0]?.addSheet?.properties?.sheetId;
         }
-        const table = planTable(solution, this.garden.measurements, labels);
+        const table = planTable(solution, this.garden.measurements, labels, this.garden.lines);
         const q = quoteSheet(PLAN_TAB);
         await sheets.clearRange(this.id, `${q}!A1:${columnLetter(PLAN_COLUMNS - 1)}`);
         await sheets.batchUpdateValues(this.id, [

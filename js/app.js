@@ -4,12 +4,12 @@ import { t, setLanguage, getLanguage, applyTranslations, LANGUAGES } from './i18
 import { isConfigured, hasValidToken, requestToken, signOut } from './google-auth.js';
 import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
-import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn } from './model.js';
+import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn, isLineDrawn } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { kindOf, pointsOfMeasurement } from './solver/observations.js';
-import { lineKey, isLine, lineEnds, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
+import { lineKey, isLine, lineEnds, sameLine, availableLines, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
 import { HintsPanel } from './view/hints-panel.js';
@@ -115,11 +115,18 @@ function recompute(prefer = null) {
     state.hints = solution.u
         ? [
             ...suggestMeasurements(solution, { tapeLength: s.tapeLength, blocked, use3D: s.mode3d, heights: s.heights, maxResults: 8 }),
-            ...suggestOffsets(solution, { lines: referenceLines(garden.measurements), tapeLength: s.tapeLength, use3D: s.mode3d, maxResults: 8 })
+            ...suggestOffsets(solution, { lines: offsetLines(garden), tapeLength: s.tapeLength, use3D: s.mode3d, maxResults: 8 })
         ].sort((a, b) => b.score - a.score).slice(0, 8)
         : [];
     state.under = underdeterminedPoints(solution);
     ({ frame: state.frame, positions: state.positions } = layoutPositions(solution, garden.points, garden.measurements));
+}
+
+// Lines that distances can be measured from: the ones used in offsets and angles, and lines without a reading.
+function offsetLines(garden) {
+    const out = new Map(referenceLines(garden.measurements).map(l => [pairKey(...l), l]));
+    for (const l of garden.lines || []) out.set(pairKey(l.from, l.to), [l.from, l.to]);
+    return [...out.values()];
 }
 
 // Sketch position (sketch frame) for a point created without tapping the plan: next to the point or line
@@ -508,6 +515,10 @@ const actions = {
     // A point or a measured line tapped on the plan: picks "from" / "to" while measuring.
     // With the select tool (station = true) the tap says where I am; otherwise it picks what to measure to.
     select(sel, station = false) {
+        if (state.ui.tool === 'line') {
+            actions.lineTap(sel);
+            return;
+        }
         const key = sel.line ? lineKey(...sel.line) : sel.point;
         if (!station && !sel.line && state.ui.tab !== 'measure') {
             actions.selectPoint(sel.point);
@@ -525,11 +536,52 @@ const actions = {
         renderTabs();
     },
 
-    // Shown on the plan or not: { point: name } or { measurement: id }.
+    // Line tool: tap one end, then the other; the next tap continues from there (a fence of several sections).
+    // Tapping the last point again ends the chain.
+    lineTap(sel) {
+        if (!sel.point) return;
+        const start = state.ui.lineStart;
+        if (!start || start === sel.point) {
+            state.ui.lineStart = start ? '' : sel.point;
+            state.ui.selected = state.ui.lineStart;
+            if (state.ui.lineStart) toast(t('lineStartHelp', { name: sel.point }), 'info');
+            renderPlan();
+            return;
+        }
+        actions.addLine(start, sel.point);
+        state.ui.lineStart = sel.point;
+        state.ui.selected = sel.point;
+        renderPlan();
+    },
+
+    // A line without a reading between two points; it can be drawn on the plan and used in angles and offsets.
+    addLine(a, b) {
+        if (!a || !b || a === b) return;
+        if (availableLines(state.garden).some(([c, d]) => sameLine(a, b, c, d))) {
+            toast(t('lineExists', { line: `${a}–${b}` }), 'info');
+            return;
+        }
+        state.store.addLine({ from: a, to: b, visible: true });
+        refresh();
+        toast(t('lineAdded', { line: `${a}–${b}` }), 'ok');
+    },
+
+    deleteLine(a, b) {
+        const used = state.garden.measurements.filter(m => kindOf(m) !== 'distance' && (sameLine(a, b, m.from, m.fromB) || (kindOf(m) === 'angle' && sameLine(a, b, m.to, m.toB))));
+        confirmDelete(t('deleteLineTitle', { line: `${a}–${b}` }), used.length ? t('deleteLineTextUsed', { n: used.length }) : t('deleteLineText'), () => {
+            state.store.deleteLine(a, b);
+            refresh();
+        });
+    },
+
+    // Shown on the plan or not: { point: name }, { measurement: id } or { line: [a, b] }.
     toggleVisible(item) {
         if (item.point) {
             const p = state.garden.points.find(x => x.name === item.point);
             if (p) state.store.updatePoint(p.name, { visible: !isPointShown(p) });
+        } else if (item.line) {
+            const l = (state.garden.lines || []).find(x => sameLine(x.from, x.to, ...item.line));
+            if (l) state.store.updateLine(l.from, l.to, { visible: !isLineDrawn(l) });
         } else {
             const m = state.garden.measurements.find(x => x.id === item.measurement);
             if (m) state.store.updateMeasurement(m.id, { visible: !isMeasurementDrawn(m) });
@@ -539,11 +591,17 @@ const actions = {
 
     setTool(tool, { quiet = false } = {}) {
         state.ui.tool = state.ui.tool === tool ? 'pan' : tool;
-        planView.setMode(state.ui.tool);
+        if (state.ui.lineStart) {
+            if (state.ui.selected === state.ui.lineStart) state.ui.selected = '';
+            state.ui.lineStart = '';
+            renderPlan();
+        }
+        planView.setMode(state.ui.tool === 'line' ? 'pan' : state.ui.tool);
+        $('#lineButton').classList.toggle('active', state.ui.tool === 'line');
         $('#selectButton').classList.toggle('active', state.ui.tool === 'select');
         $('#addPointButton').classList.toggle('active', state.ui.tool === 'add');
         $('#moveButton').classList.toggle('active', state.ui.tool === 'move');
-        const help = { select: 'toolSelectHelp', add: 'toolAddHelp', move: 'toolMoveHelp' }[state.ui.tool];
+        const help = { select: 'toolSelectHelp', add: 'toolAddHelp', move: 'toolMoveHelp', line: 'toolLineHelp' }[state.ui.tool];
         if (help && !quiet) toast(t(help), 'info');
     },
 
@@ -606,8 +664,11 @@ const actions = {
     // lines through it); a datum setting naming it falls back to automatic.
     deletePoint(name) {
         const used = state.garden.measurements.filter(m => pointsOfMeasurement(m).includes(name));
-        confirmDelete(t('deletePointTitle', { name }), used.length ? t('deletePointText', { name, n: used.length }) : t('deletePointTextUnused', { name }), () => {
+        const lines = (state.garden.lines || []).filter(l => l.from === name || l.to === name);
+        const n = used.length + lines.length;
+        confirmDelete(t('deletePointTitle', { name }), n ? t('deletePointText', { name, n }) : t('deletePointTextUnused', { name }), () => {
             for (const m of used) state.store.deleteMeasurement(m.id);
+            for (const l of lines) state.store.deleteLine(l.from, l.to);
             state.store.deletePoint(name);
             const s = state.garden.settings;
             const datum = ['origin', 'axis', 'side'].filter(key => s[key] === name);
@@ -788,6 +849,7 @@ function bindMainScreen() {
     $('#selectButton').addEventListener('click', () => actions.setTool('select'));
     $('#addPointButton').addEventListener('click', () => actions.setTool('add'));
     $('#moveButton').addEventListener('click', () => actions.setTool('move'));
+    $('#lineButton').addEventListener('click', () => actions.setTool('line'));
     $('#layersButton').addEventListener('click', () => {
         renderLayersMenu();
         $('#layersMenu').classList.toggle('hidden');
