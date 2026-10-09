@@ -192,7 +192,9 @@ test('create + live append + reload round-trip', async () => {
     const store = await seededStore();
     assert.equal(store.sync.state, 'ok');
     assert.equal(sheetRows(store.id, 'Points').length, 5);
-    assert.deepEqual(sheetRows(store.id, 'Measurements')[1].slice(0, 7), ['m0', 't', 'A', 0, 'B', 0, 10]);
+    const [header, first] = sheetRows(store.id, 'Measurements');
+    assert.deepEqual(['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance'].map(c => first[header.indexOf(c)]), ['m0', 't', 'A', 0, 'B', 0, 10]);
+    assert.deepEqual(header.slice(0, 10), ['id', 'timestamp', 'kind', 'from', 'from_b', 'from_h', 'to', 'to_b', 'to_h', 'distance'], 'new sheets: line ends side by side');
     const again = new GoogleStore(store.id);
     const garden = await again.load();
     assert.equal(garden.points.length, 4);
@@ -221,8 +223,8 @@ test('offline changes are queued and flushed later', async () => {
 test('excluding a measurement updates its status cell', async () => {
     const store = await seededStore();
     await store.updateMeasurement('m2', { status: 'excluded' });
-    const row = sheetRows(store.id, 'Measurements').find(r => r[0] === 'm2');
-    assert.equal(row[7], 'excluded');
+    const [header, ...rows] = sheetRows(store.id, 'Measurements');
+    assert.equal(rows.find(r => r[0] === 'm2')[header.indexOf('status')], 'excluded');
 });
 
 test('settings are rewritten as key/value rows', async () => {
@@ -435,6 +437,8 @@ test('write-back adds the Plan tab with the app link and one chart', async () =>
     assert.deepEqual(tab[3], ['x', 'P', 'L', 'H', '']);
     assert.deepEqual(tab.slice(4, 8).map(r => r[4]), ['A', 'B', 'C', 'D']);
     assert.equal(book.charts.length, 1, 'the chart is replaced, not added again');
+    const [mh, ...mrows] = sheetRows(store.id, 'Measurements');
+    assert.equal(mrows.find(r => r[0] === 'm0')[mh.indexOf('description')], 'A (0.0) → B (0.0) = 10.000 m');
     const chart = book.charts[0].chart.spec.basicChart;
     assert.equal(chart.chartType, 'SCATTER');
     assert.equal(chart.series.length, 3, 'points, the drawn line A–B and helper lines');
@@ -459,4 +463,25 @@ test('lines without a reading: add, hide, delete, and an old sheet gets the Line
     const old = await new GoogleStore('old').load();
     assert.deepEqual(old.lines, []);
     assert.ok(books.get('old').sheets.has('Lines'));
+});
+
+test('an old sheet gets the description column after its other new columns, without overwriting them', async () => {
+    const id = 'old-desc';
+    books.set(id, {
+        title: 'Old',
+        sheets: new Map([['Measurements', [
+            ['id', 'from', 'to', 'distance', 'kind', 'from_b', 'to_b'],
+            ['a', 'A', 'B', 10, '', '', ''],
+            ['b', 'A', 'C', 8, '', '', ''],
+            ['c', 'B', 'C', 6, '', '', ''],
+            ['d', 'A', 'A', 90, 'angle', 'B', 'C']
+        ]]])
+    });
+    const store = new GoogleStore(id);
+    const res = snoop(solverInput(await store.load()));
+    await store.writeResults(res.solution, res.suspects);
+    const [h, ...rows] = sheetRows(id, 'Measurements');
+    assert.equal(new Set(h).size, h.length, 'no column written twice');
+    assert.deepEqual(h.slice(-4), ['residual', 'w', 'flag', 'description']);
+    assert.equal(rows[3][h.indexOf('description')], 'A–B ∠ A–C = 90.0°');
 });

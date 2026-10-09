@@ -8,7 +8,14 @@ import {
 import * as sheets from './sheets-api.js';
 import { HttpError, quoteSheet, columnLetter } from './sheets-api.js';
 import { PLAN_TAB, PLAN_FIRST_ROW, PLAN_COLUMNS, planTable, planChart } from './sheet-plan.js';
-import { storage, uid } from './util.js';
+import { storage, uid, fmt } from './util.js';
+import { describeMeasurement } from './view/describe.js';
+import { kindOf } from './solver/observations.js';
+
+// The description column of the Measurements tab, in metres and degrees whatever the entry unit.
+function describeRow(m) {
+    return `${describeMeasurement(m)} = ${kindOf(m) === 'angle' ? `${fmt(m.distance, 1)}°` : `${fmt(m.distance, 3)} m`}`;
+}
 
 const RECENT_KEY = 'plantape:recent';
 
@@ -553,6 +560,12 @@ export class GoogleStore extends BaseStore {
             const key = solution.measurements.has(id) ? id : solvedId.get(id);
             return key ? { res: solution.measurements.get(key), id: key } : null;
         }, () => true, true);
+        // What each row measures, readable without knowing the columns ("A–B ∠ C–D = 90.0°").
+        const byId = new Map(this.garden.measurements.map(m => [m.id, m]));
+        this.addColumns(data, TABS.measurements, measurementValues, { description: describeRow }, row => {
+            const id = idCol >= 0 ? String(row[idCol] ?? '').trim() : '';
+            return byId.get(id) || null;
+        }, () => true);
 
         if (data.length) await sheets.batchUpdateValues(this.id, data);
         this.saveCache();
@@ -601,6 +614,7 @@ export class GoogleStore extends BaseStore {
             if (col < 0) {
                 col = nextCol++;
                 headers[col] = column;
+                (values[0] ||= [])[col] = column; // a later call on the same values sees it
                 data.push({ range: `${quoteSheet(tab)}!${columnLetter(col)}1`, values: [[column]] });
             }
             if (!body.length) continue;

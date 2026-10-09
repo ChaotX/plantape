@@ -13,7 +13,9 @@ export const TABS = {
 
 export const HEADERS = {
     points: ['name', 'category', 'notes', 'x', 'y', 'z', 'sigma_xy', 'sigma_z', 'links', 'status', 'sketch_x', 'sketch_y', 'visible'],
-    measurements: ['id', 'timestamp', 'from', 'from_h', 'to', 'to_h', 'distance', 'status', 'residual', 'w', 'flag', 'note', 'kind', 'from_b', 'to_b', 'visible'],
+    // New sheets: what is measured first, with each line's two points side by side. Columns are found by their
+    // header, so older sheets with another order keep working.
+    measurements: ['id', 'timestamp', 'kind', 'from', 'from_b', 'from_h', 'to', 'to_b', 'to_h', 'distance', 'description', 'status', 'note', 'visible', 'residual', 'w', 'flag'],
     settings: ['key', 'value'],
     blocked: ['from', 'to', 'note'],
     lines: ['from', 'to', 'visible', 'note']
