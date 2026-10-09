@@ -447,7 +447,7 @@ export class PlanView {
             `<rect x="0" y="0" width="${w}" height="${h}" fill="#fbfcf8"/>` +
             this.renderGrid(w, h) +
             renderScene(scene, this.tf, { pointR: 5, font: 13, stroke: 1.2, hit: 16 }) +
-            `<rect x="6" y="${h - 40}" width="${Math.min(w - 12, 520)}" height="34" rx="6" fill="#fff" fill-opacity="0.85"/>` +
+            `<rect x="6" y="${h - 40}" width="${Math.max(Math.min(w - 12, 520), 0)}" height="34" rx="6" fill="#fff" fill-opacity="0.85"/>` +
             renderOverlay({ tf: this.tf, x: 16, y: h - 14, font: 11, stroke: 1, maxBar: Math.min(w * 0.3, 160), zRange, ellipseScale, showEllipses: scene.options?.ellipses !== false });
     }
 

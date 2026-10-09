@@ -75,7 +75,10 @@ Without this setup the app still works, but gardens are stored in the browser on
    - `https://<user>.github.io`
    - `http://localhost:8000` (for local testing)
 5. **Credentials → Create credentials → API key**. Restrict it:
-   - *Application restrictions → HTTP referrers:* `https://<user>.github.io/*` and `http://localhost:8000/*`.
+   - *Application restrictions → Websites:* `https://<user>.github.io/*`, `http://localhost:8000/*` and
+     **`https://docs.google.com/*`**. The Drive Picker runs in a frame on docs.google.com and checks the key from
+     there; without that entry the Picker shows "The API developer key is invalid". Use the bare
+     `https://<user>.github.io/*`, not a path like `/<repo>/*`: Google only sees the site's origin.
    - *API restrictions:* Google Picker API.
 6. Copy the values into [js/config.js](js/config.js):
    - `GOOGLE_CLIENT_ID`: the OAuth client ID.
