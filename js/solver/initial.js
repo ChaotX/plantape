@@ -401,20 +401,30 @@ function commonNeighbours(graph, a, b) {
 
 // Seed edge for the trilateration: the distance closing the most triangles (ties: best connected ends,
 // then names). It does not depend on the chosen datum, so any datum yields the same shape.
-function pickSeed(graph) {
-    let best = null;
-    let bestScore = -1;
+// Measured pairs, best braced first (shared neighbours, then links).
+function seedCandidates(graph) {
+    const out = [];
     for (const [a, inner] of graph) {
         for (const b of inner.keys()) {
             if (b <= a) continue;
-            const score = commonNeighbours(graph, a, b) * 1000 + graph.get(a).size + graph.get(b).size;
-            if (score > bestScore) {
-                bestScore = score;
-                best = [a, b];
-            }
+            out.push({ pair: [a, b], score: commonNeighbours(graph, a, b) * 1000 + graph.get(a).size + graph.get(b).size });
         }
     }
-    return best;
+    return out.sort((p, q) => q.score - p.score).map(c => c.pair);
+}
+
+// The pair to start from: the one from which most points can be placed. The best-braced pair is not always it:
+// a single reading between two groups (a house and a fence joined by one distance) has well-linked ends, but
+// nothing can be placed from it while the groups can still turn against each other.
+function pickSeed(cons, sketches) {
+    const candidates = seedCandidates(cons.graph).slice(0, 60);
+    let best = null;
+    for (const pair of candidates) {
+        const reach = greedy(cons, pair[0], pair[1], new Map(), sketches).placed.size;
+        if (!best || reach > best.reach) best = { pair, reach };
+        if (reach === cons.names.length) break;
+    }
+    return best?.pair || null;
 }
 
 function pickMaxDegree(graph, names) {
@@ -500,15 +510,15 @@ export function initialPlacement(measurements, settings = {}, points = [], prefe
     const cons = new Constraints(measurements);
     const graph = cons.graph;
     if (cons.names.length === 0) return { placed: new Map(), origin: null, axis: null, order: [] };
-    const seed = pickSeed(graph);
-    if (!seed) {
-        const only = graph.has(origin) ? origin : cons.names[0];
-        return { placed: new Map([[only, { x: 0, y: 0 }]]), origin: only, axis: null, order: [only] };
-    }
     const sketches = new Map();
     for (const p of points) {
         const s = sketchOf(p);
         if (s) sketches.set(p.name, s);
+    }
+    const seed = pickSeed(cons, sketches);
+    if (!seed) {
+        const only = graph.has(origin) ? origin : cons.names[0];
+        return { placed: new Map([[only, { x: 0, y: 0 }]]), origin: only, axis: null, order: [only] };
     }
 
     // Points placed from only two readings have mirror alternatives. The choices are searched for the whole

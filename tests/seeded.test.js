@@ -53,3 +53,19 @@ test('a point the readings do not fix keeps waiting', () => {
     assert.equal(P.get('Ház4').placed, false);
     assert.ok(P.get('Ház3').placed && P.get('K3').placed);
 });
+
+test('a house and a fence joined by one distance: a whole group is placed, not just the joining pair', () => {
+    // House H1–H4 and fence F1–F4 are rectangles of lines and square corners with their sides measured; the
+    // only reading between them is H2–F1, so the house can still swing around F1.
+    const P = { H1: [10, 5], H2: [20, 5], H3: [20, 16], H4: [10, 16], F1: [24, 2], F2: [24, 37], F3: [-16, 37], F4: [-16, 2] };
+    const g = emptyGarden('two groups');
+    g.points = Object.entries(P).map(([name, [x, y]]) => ({ name, category: '', notes: '', sketchX: x * 0.5 + 1, sketchY: y * 0.5 - 1 }));
+    const len = (a, b) => Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1]);
+    const rect = c => c.map((n, i) => ({ kind: 'angle', from: n, fromB: c[(i + 1) % 4], to: c[(i + 1) % 4], toB: c[(i + 2) % 4], distance: 90 }));
+    g.measurements = [
+        ...rect(['H1', 'H2', 'H3', 'H4']), ...rect(['F1', 'F2', 'F3', 'F4']),
+        ...[['H1', 'H2'], ['H2', 'H3'], ['F4', 'F1'], ['F3', 'F2'], ['F2', 'F1'], ['H2', 'F1']].map(([from, to]) => ({ from, to, fromH: 0, toH: 0, distance: len(from, to) }))
+    ].map((m, i) => ({ id: `m${i}`, status: 'active', ...m }));
+    const placed = [...snoop(solverInput(g)).solution.points].filter(([, p]) => p.placed).map(([n]) => n).sort();
+    assert.ok(['F1,F2,F3,F4', 'H1,H2,H3,H4'].includes(placed.join(',')), placed.join(','));
+});
