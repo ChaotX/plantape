@@ -21,7 +21,8 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
     (fence posts in a row);
   - line → line: the angle between them, e.g. **⟂ 90°** for a square corner or **∥ 0°** for parallel edges.
   A rectangle needs 3 sides and 2 square corners; the 4th side and the other corners are then checks.
-- **Sketch on the plan:** tap **⊕** and then the plan to place a new point roughly where it is. Two readings of
+- **Sketch on the plan:** tap **⊕** and then the plan to place a new point roughly where it is. A point named
+  in the Measure tab is sketched next to the point or line you measure from; drag it into place. Two readings of
   any kind fix a point up to a mirror image (which side of the fence, which way along it); the sketch picks the
   one you mean. If a point lands on the wrong side, drag it with **✥** close to where it really is: it jumps to
   the other solution if the readings allow one, and springs back if it is already fixed. The sketch is never

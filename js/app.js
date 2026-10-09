@@ -7,9 +7,9 @@ import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } 
 import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
-import { sketchFrame, sketchOf } from './solver/initial.js';
+import { layoutPositions, freeSpotNear } from './positions.js';
 import { kindOf } from './solver/observations.js';
-import { lineKey, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
+import { lineKey, isLine, lineEnds, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
 import { HintsPanel } from './view/hints-panel.js';
@@ -111,14 +111,20 @@ function recompute() {
         ].sort((a, b) => b.score - a.score).slice(0, 8)
         : [];
     state.under = underdeterminedPoints(solution);
-    state.frame = sketchFrame(solution, garden.points);
-    state.positions = new Map();
-    for (const p of garden.points) {
-        const r = solution.points.get(p.name);
-        const sketch = sketchOf(p);
-        if (r?.placed) state.positions.set(p.name, { x: r.x, y: r.y, placed: true });
-        else if (sketch) state.positions.set(p.name, { ...state.frame.apply(sketch), placed: false });
-    }
+    ({ frame: state.frame, positions: state.positions } = layoutPositions(solution, garden.points));
+}
+
+// Sketch position (sketch frame) for a point created without tapping the plan: next to the point or line
+// being measured from (the new point is within reach of the tape there), otherwise in the middle of the view.
+function defaultSketch() {
+    const station = state.ui.station;
+    let around = null;
+    if (isLine(station)) {
+        const [A, B] = lineEnds(station).map(n => state.positions.get(n));
+        if (A && B) around = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+    } else if (station) around = state.positions.get(station) || null;
+    const spot = around ? freeSpotNear(around, state.positions) : planView.centerWorld();
+    return state.frame.invert(spot);
 }
 
 // ---- Rendering ----------------------------------------------------------------------------------
@@ -243,8 +249,10 @@ function showGardenScreen() {
 
 // ---- Actions ------------------------------------------------------------------------------------
 
-// sketch: { x, y } in the sketch frame (from a tap on the plan), or null.
+// sketch: { x, y } in the sketch frame (from a tap on the plan); without one the point is sketched next to
+// the current station, so it shows on the plan right away and can be dragged into place.
 function newPointDialog(initialName, onCreated, sketch = null) {
+    sketch = sketch || defaultSketch();
     let category = 'other';
     const card = openModal(`
         <h3>${escapeHtml(t('newPoint'))}</h3>
@@ -272,7 +280,7 @@ function newPointDialog(initialName, onCreated, sketch = null) {
                 return;
             }
             const point = { name, category, notes: card.querySelector('#pointNotesInput').value.trim() };
-            if (sketch) Object.assign(point, { sketchX: Math.round(sketch.x * 100) / 100, sketchY: Math.round(sketch.y * 100) / 100 });
+            Object.assign(point, { sketchX: Math.round(sketch.x * 100) / 100, sketchY: Math.round(sketch.y * 100) / 100 });
             state.store.addPoint(point);
             closeModal();
             refresh();

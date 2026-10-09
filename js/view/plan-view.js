@@ -70,7 +70,7 @@ export function autoEllipseScale(solution, pxPerMetre, targetPx = 16) {
 
 // Text with a white halo, drawn as a separate stroked copy underneath (svg2pdf ignores paint-order).
 function haloText(x, y, size, color, html) {
-    const common = `x="${x}" y="${y}" font-size="${size}" font-family="Helvetica, Arial, sans-serif"`;
+    const common = `x="${x}" y="${y}" font-size="${size}" font-family="Helvetica, Arial, sans-serif" pointer-events="none"`;
     return `<text ${common} fill="#fff" stroke="#fff" stroke-width="${size * 0.25}" stroke-linejoin="round">${html}</text><text ${common} fill="${color}">${html}</text>`;
 }
 
@@ -110,6 +110,10 @@ export function renderScene(scene, tf, style) {
         return { r, color, width, dash };
     };
     const placedAll = names => names.every(n => P.get(n)?.placed);
+    // Drawing position: computed, or else sketched (only in the interactive view, not in exports).
+    const at = n => (P.get(n)?.placed ? P.get(n) : scene.sketchPos?.get(n));
+    const knownAll = names => names.every(n => at(n));
+    const pendingStyle = ` stroke-dasharray="${sw * 2} ${sw * 2}" opacity="0.6"`;
     const seg = (a, b, color, width, extra = '') => `<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="${color}" stroke-width="${width}"${extra}/>`;
     const foot = (A, B, p) => {
         const dx = B.x - A.x;
@@ -123,9 +127,9 @@ export function renderScene(scene, tf, style) {
         // Reference lines (fences, walls…): dashed, spanning their ends and the feet of their offsets.
         const refs = new Map();
         const addRef = (a, b, p = null) => {
-            if (!placedAll([a, b])) return;
+            if (!knownAll([a, b])) return;
             const key = a < b ? lineKey(a, b) : lineKey(b, a);
-            if (!refs.has(key)) refs.set(key, { a: P.get(a < b ? a : b), b: P.get(a < b ? b : a), lo: 0, hi: 1 });
+            if (!refs.has(key)) refs.set(key, { a: at(a < b ? a : b), b: at(a < b ? b : a), lo: 0, hi: 1 });
             if (p) {
                 const ref = refs.get(key);
                 const f = foot(ref.a, ref.b, p);
@@ -135,7 +139,7 @@ export function renderScene(scene, tf, style) {
         };
         for (const m of garden.measurements) {
             const k = kindOf(m);
-            if (k === 'offset' && m.status !== 'excluded') addRef(m.from, m.fromB, P.get(m.to)?.placed ? P.get(m.to) : null);
+            if (k === 'offset' && m.status !== 'excluded') addRef(m.from, m.fromB, at(m.to) || null);
             else if (k === 'angle' && m.status !== 'excluded') {
                 addRef(m.from, m.fromB);
                 addRef(m.to, m.toB);
@@ -151,17 +155,27 @@ export function renderScene(scene, tf, style) {
             const { r, color, width, dash } = styleOf(m);
             const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
             if (k === 'distance') {
-                if (!placedAll([m.from, m.to])) continue;
-                const a = P.get(m.from);
-                const b = P.get(m.to);
+                if (!knownAll([m.from, m.to])) continue;
+                const a = at(m.from);
+                const b = at(m.to);
+                if (!placedAll([m.from, m.to])) {
+                    // Between points not computed yet: drawn faintly at their sketches, still selectable as a line.
+                    out.push(seg(a, b, '#90a4ae', sw, pendingStyle));
+                    if (style.hit) out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="transparent" stroke-width="${style.hit * 0.9}" data-line="${escapeHtml(lineKey(m.from, m.to))}" style="cursor:pointer"><title>${escapeHtml(`${m.from}–${m.to}`)}</title></line>`);
+                    continue;
+                }
                 const title = `${m.from} (${fmt(m.fromH, 1)}) → ${m.to} (${fmt(m.toH, 1)}): ${fmt(m.distance, 3)} m` +
                     (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual * 1000, 1)} mm` : '') + (r.w != null ? `, w = ${fmt(r.w, 2)}` : '');
                 out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="${color}" stroke-width="${width}"${dashAttr} data-meas="${escapeHtml(m.id)}"><title>${escapeHtml(title)}</title></line>`);
                 if (style.hit) out.push(`<line x1="${X(a.x)}" y1="${Y(a.y)}" x2="${X(b.x)}" y2="${Y(b.y)}" stroke="transparent" stroke-width="${style.hit * 0.9}" data-line="${escapeHtml(lineKey(m.from, m.to))}" style="cursor:pointer"><title>${escapeHtml(`${m.from}–${m.to}`)}</title></line>`);
             } else if (k === 'offset') {
-                if (!placedAll([m.from, m.fromB, m.to]) || m.distance === 0) continue;
-                const p = P.get(m.to);
-                const f = foot(P.get(m.from), P.get(m.fromB), p);
+                if (!knownAll([m.from, m.fromB, m.to]) || m.distance === 0) continue;
+                const p = at(m.to);
+                const f = foot(at(m.from), at(m.fromB), p);
+                if (!placedAll([m.from, m.fromB, m.to])) {
+                    out.push(seg(p, f, color, width, pendingStyle));
+                    continue;
+                }
                 const title = `${m.from}–${m.fromB} ⊥ ${m.to}: ${fmt(m.distance, 3)} m` + (Number.isFinite(r.residual) ? `, v = ${fmt(r.residual * 1000, 1)} mm` : '');
                 out.push(`<line x1="${X(p.x)}" y1="${Y(p.y)}" x2="${X(f.x)}" y2="${Y(f.y)}" stroke="${color}" stroke-width="${width}"${dashAttr}><title>${escapeHtml(title)}</title></line>`);
             } else {
@@ -214,7 +228,7 @@ export function renderScene(scene, tf, style) {
     for (const [key, color] of [[scene.station, '#1565c0'], [scene.target, '#2e7d32']]) {
         if (!isLine(key)) continue;
         const [a, b] = lineEnds(key);
-        if (placedAll([a, b])) out.push(seg(P.get(a), P.get(b), color, style.pointR * 1.4, ' stroke-linecap="round" opacity="0.35"'));
+        if (knownAll([a, b])) out.push(seg(at(a), at(b), color, style.pointR * 1.4, ' stroke-linecap="round" opacity="0.35"'));
     }
 
     // Suggested measurements
@@ -428,6 +442,12 @@ export class PlanView {
         const opt = this.scene?.options?.ellipseScale;
         if (opt && opt !== 'auto') return Number(opt);
         return this.scene?.solution ? autoEllipseScale(this.scene.solution, this.tf.scale) : 1;
+    }
+
+    // Plan coordinates of the middle of the view.
+    centerWorld() {
+        const { w, h } = this.size();
+        return this.tf ? this.toWorld({ x: w / 2, y: h / 2 }) : { x: 0, y: 0 };
     }
 
     // Screen (svg pixels) → plan coordinates in metres.

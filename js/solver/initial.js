@@ -182,13 +182,31 @@ class Constraints {
             this.byPoint.get(name).push(c);
         };
         const seen = new Set();
+        // Repeated readings of the same thing give one locus (offsets averaged, angles: the first one);
+        // two copies of the same locus never cross and would look like two readings.
+        const pair = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+        const offsetsByKey = new Map();
+        const angleKeys = new Set();
         for (const m of measurements) {
             const k = kindOf(m);
             if (k === 'offset') {
-                const c = { kind: 'offset', p: m.to, a: m.from, b: m.fromB, d: m.distance };
+                const key = `${m.to}|${pair(m.from, m.fromB)}`;
+                const prev = offsetsByKey.get(key);
+                if (prev) {
+                    prev.d = (prev.d * prev.n + m.distance) / (prev.n + 1);
+                    prev.n++;
+                    continue;
+                }
+                const c = { kind: 'offset', p: m.to, a: m.from, b: m.fromB, d: m.distance, n: 1 };
+                offsetsByKey.set(key, c);
                 this.offsets.push(c);
                 add(m.to, c);
             } else if (k === 'angle') {
+                const l1 = pair(m.from, m.fromB);
+                const l2 = pair(m.to, m.toB);
+                const key = l1 < l2 ? `${l1}|${l2}` : `${l2}|${l1}`;
+                if (angleKeys.has(key)) continue;
+                angleKeys.add(key);
                 const c = { kind: 'angle', a: m.from, b: m.fromB, c: m.to, d: m.toB, theta: (m.distance * Math.PI) / 180 };
                 this.angles.push(c);
                 for (const n of new Set([c.a, c.b, c.c, c.d])) add(n, c);
@@ -320,12 +338,14 @@ function greedy(cons, seedA, seedB, forced, sketches) {
     const order = [seedA, seedB];
     const ambiguous = [];
     const refs = [seedA, seedB].filter(n => sketches.has(n));
+    const stuck = new Map(); // name → number of loci that did not cross (retried once it has more)
     for (;;) {
         let best = null;
         let bestLoci = null;
         for (const name of cons.names) {
             if (placed.has(name)) continue;
             const loci = cons.lociFor(name, placed);
+            if (stuck.get(name) === loci.length) continue;
             if (loci.length >= 2 && (!bestLoci || loci.length > bestLoci.length)) {
                 best = name;
                 bestLoci = loci;
@@ -338,9 +358,14 @@ function greedy(cons, seedA, seedB, forced, sketches) {
         }
         const res = place(bestLoci, forced.get(best) || 0, target);
         if (!res) {
-            // Degenerate (coincident or parallel loci): drop it next to the first circle's centre.
-            const L = bestLoci.find(l => l.circle) || bestLoci[0];
-            placed.set(best, L.circle ? { x: L.c.x + L.r, y: L.c.y } : { ...L.lines[0].p });
+            const circles = bestLoci.filter(l => l.circle);
+            if (circles.length < 2) {
+                // Only parallel lines (e.g. two readings from parallel fences): not fixed yet, stays unplaced.
+                stuck.set(best, bestLoci.length);
+                continue;
+            }
+            // Degenerate (coincident circle centres): drop it next to the first centre.
+            placed.set(best, { x: circles[0].c.x + circles[0].r, y: circles[0].c.y });
         } else {
             if (res.equal > 1 && placed.size > 2 && !target) ambiguous.push({ name: best, n: res.equal });
             placed.set(best, res.pos);
