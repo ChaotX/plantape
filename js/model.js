@@ -213,10 +213,11 @@ export function gardenFromTables({ points, measurements, settings, blocked }) {
     return garden;
 }
 
-// Solver input from a garden.
-export function solverInput(garden) {
+// Solver input from a garden. prefer: a point just dragged on the plan, whose sketch wins mirror choices.
+export function solverInput(garden, prefer = null) {
     const s = garden.settings;
     return {
+        prefer,
         points: garden.points,
         measurements: garden.measurements,
         settings: {

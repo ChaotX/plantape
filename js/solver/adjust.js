@@ -58,7 +58,7 @@ function heightPairs(m) {
     return [];
 }
 
-// input: { points: [{name, sketchX?, sketchY?}], measurements: [{id, kind, from, fromB, fromH, to, toB, toH,
+// input: { prefer?: name of a point just dragged (its sketch wins mirror choices), points: [{name, sketchX?, sketchY?}], measurements: [{id, kind, from, fromB, fromH, to, toB, toH,
 // distance, status}], settings }
 // options.exclude: Set of measurement ids to leave out in addition to excluded ones.
 export function solveNetwork(input, options = {}) {
@@ -68,7 +68,7 @@ export function solveNetwork(input, options = {}) {
 
     const usable = input.measurements.filter(m => isActive(m) && !exclude.has(m.id) && isValidMeasurement(m));
 
-    const init = initialPlacement(usable, settings, input.points || []);
+    const init = initialPlacement(usable, settings, input.points || [], input.prefer || null);
     const placed = init.placed;
     if (settings.flip) for (const p of placed.values()) p.y = -p.y;
 

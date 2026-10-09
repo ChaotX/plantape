@@ -82,6 +82,21 @@ export function fitSimilarity(pairs) {
     return { apply, invert, sse, count: n };
 }
 
+// fitSimilarity that ignores sketches far off from their points (e.g. points that just moved to their
+// mirror position, whose old sketches would otherwise drag the whole fit): fit, drop the pairs off by more
+// than max(1 m, 3 × the median), fit again.
+export function robustFitSimilarity(pairs) {
+    const T = fitSimilarity(pairs);
+    if (pairs.length < 4) return T;
+    const res = pairs.map(({ s, w }) => {
+        const q = T.apply(s);
+        return Math.hypot(q.x - w.x, q.y - w.y);
+    });
+    const median = [...res].sort((a, b) => a - b)[Math.floor(res.length / 2)];
+    const keep = pairs.filter((_, i) => res[i] <= Math.max(1, 3 * median));
+    return keep.length >= 2 && keep.length < pairs.length ? fitSimilarity(keep) : T;
+}
+
 export function sketchOf(point) {
     return point && Number.isFinite(point.sketchX) && Number.isFinite(point.sketchY) ? { x: point.sketchX, y: point.sketchY } : null;
 }
@@ -332,7 +347,8 @@ function place(loci, choice = 0, target = null) {
 
 // Greedy incremental placement from a seed edge. The order depends only on the readings, so runs with
 // different mirror choices (forced: Map name → candidate index) place the same points in the same order.
-// Points with a sketch are decided by the sketch once two placed points with sketches anchor the frame.
+// Points that are not forced and have a sketch are decided by the sketch once two placed points with
+// sketches anchor the frame. ambiguous: every point that had several equally good positions, with how many.
 function greedy(cons, seedA, seedB, forced, sketches) {
     const placed = new Map([[seedA, { x: 0, y: 0 }], [seedB, { x: cons.graph.get(seedA).get(seedB), y: 0 }]]);
     const order = [seedA, seedB];
@@ -353,8 +369,8 @@ function greedy(cons, seedA, seedB, forced, sketches) {
         }
         if (!best) break;
         let target = null;
-        if (sketches.has(best) && refs.length >= 2) {
-            target = fitSimilarity(refs.map(n => ({ s: sketches.get(n), w: placed.get(n) }))).apply(sketches.get(best));
+        if (!forced.has(best) && sketches.has(best) && refs.length >= 2) {
+            target = robustFitSimilarity(refs.map(n => ({ s: sketches.get(n), w: placed.get(n) }))).apply(sketches.get(best));
         }
         const res = place(bestLoci, forced.get(best) || 0, target);
         if (!res) {
@@ -367,7 +383,7 @@ function greedy(cons, seedA, seedB, forced, sketches) {
             // Degenerate (coincident circle centres): drop it next to the first centre.
             placed.set(best, { x: circles[0].c.x + circles[0].r, y: circles[0].c.y });
         } else {
-            if (res.equal > 1 && placed.size > 2 && !target) ambiguous.push({ name: best, n: res.equal });
+            if (res.equal > 1 && placed.size > 2) ambiguous.push({ name: best, n: res.equal });
             placed.set(best, res.pos);
         }
         order.push(best);
@@ -413,6 +429,29 @@ function pickMaxDegree(graph, names) {
     return best;
 }
 
+// How far the placed network is from the sketch: the sketches are fitted onto the placed points (similarity,
+// without the preferred point), then each placed point's distance from its sketch — or, for a point not
+// placed, the distance of its sketch from what is known about it — is summed (squared). The preferred point
+// (the one just dragged) weighs most, so the network settles where that point was put.
+function sketchMisfit(cons, placed, sketches, prefer) {
+    const pairs = [...placed].filter(([n]) => sketches.has(n) && n !== prefer).map(([n, w]) => ({ s: sketches.get(n), w }));
+    if (pairs.length < 2) return 0;
+    const T = robustFitSimilarity(pairs);
+    let sum = 0;
+    for (const [name, sk] of sketches) {
+        const weight = name === prefer ? 100 : 1;
+        const t = T.apply(sk);
+        if (placed.has(name)) {
+            const q = placed.get(name);
+            sum += weight * ((t.x - q.x) ** 2 + (t.y - q.y) ** 2);
+        } else {
+            const loci = cons.lociFor(name, placed);
+            if (loci.length) sum += weight * Math.min(...loci.map(L => distanceToLocus(t, L) ** 2));
+        }
+    }
+    return sum;
+}
+
 // Nearest point to pos on a locus.
 function projectOnLocus(pos, L) {
     if (L.circle) {
@@ -454,8 +493,8 @@ export function locusSnapper(measurements, placed) {
 // Datum: origin at (0,0), axis point on +x, side point (if given) at y > 0. Origin and axis only need
 // to be placed, not linked: the network is trilaterated from its best-braced edge and then moved into
 // the datum frame. points: [{ name, sketchX?, sketchY? }] — sketched positions decide mirror choices and,
-// without a side point, the overall orientation.
-export function initialPlacement(measurements, { origin, axis, side } = {}, points = []) {
+// without a side point, the overall orientation. prefer: name of a point whose sketch should win (just dragged).
+export function initialPlacement(measurements, { origin, axis, side } = {}, points = [], prefer = null) {
     const cons = new Constraints(measurements);
     const graph = cons.graph;
     if (cons.names.length === 0) return { placed: new Map(), origin: null, axis: null, order: [] };
@@ -470,28 +509,30 @@ export function initialPlacement(measurements, { origin, axis, side } = {}, poin
         if (s) sketches.set(p.name, s);
     }
 
-    // Mirror choices made from only two loci can fold a whole branch of the network. Try the other
-    // choices of each such point (re-running the placement) and keep those that clearly reduce the total
-    // misfit. Each pass applies the single change that helps most (steepest descent).
+    // Points placed from only two readings have mirror alternatives. The choices are searched for the whole
+    // network together: changing one point's choice re-places everything that depends on it. A change is
+    // kept when it clearly fits the measurements better (a folded branch), or fits them as well and brings
+    // the network closer to the sketches. Each pass applies the single change that helps most.
+    const evaluate = r => ({ run: r, meas: cons.totalMisfit(r.placed), sketch: sketchMisfit(cons, r.placed, sketches, prefer) });
+    const better = (t, c) => t.meas < c.meas * 0.8 - 1e-9 || (t.meas <= c.meas * 1.05 + 1e-4 && t.sketch < c.sketch * 0.9 - 1e-6);
     let forced = new Map();
-    let run = greedy(cons, seed[0], seed[1], forced, sketches);
-    let score = cons.totalMisfit(run.placed);
-    for (let pass = 0; pass < run.ambiguous.length; pass++) {
-        let bestTrial = null;
-        for (const { name, n } of run.ambiguous) {
+    let cur = evaluate(greedy(cons, seed[0], seed[1], forced, sketches));
+    for (let pass = 0; pass < 20; pass++) {
+        let best = null;
+        for (const { name, n } of cur.run.ambiguous) {
             for (let k = 0; k < n; k++) {
-                if (k === (forced.get(name) || 0)) continue;
+                if (forced.get(name) === k) continue;
                 const trialForced = new Map(forced).set(name, k);
-                const trial = greedy(cons, seed[0], seed[1], trialForced, sketches);
-                const trialScore = cons.totalMisfit(trial.placed);
-                if (trialScore < score * 0.8 - 1e-9 && (!bestTrial || trialScore < bestTrial.score)) {
-                    bestTrial = { forced: trialForced, run: trial, score: trialScore };
-                }
+                const trial = evaluate(greedy(cons, seed[0], seed[1], trialForced, sketches));
+                if (!better(trial, cur)) continue;
+                if (!best || better(trial, best)) best = { ...trial, forced: trialForced };
             }
         }
-        if (!bestTrial) break;
-        ({ forced, run, score } = bestTrial);
+        if (!best) break;
+        forced = best.forced;
+        cur = best;
     }
+    const run = cur.run;
     const { placed, order } = run;
 
     // Polish: re-place every point from all its loci, keeping clear improvements.

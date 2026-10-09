@@ -7,7 +7,7 @@ import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } 
 import { solverInput, gardenFromJson, gardenFromCsv, CATEGORIES } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
-import { layoutPositions, freeSpotNear } from './positions.js';
+import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { kindOf } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
@@ -97,10 +97,11 @@ function errorMessage(error) {
 
 // ---- Computation --------------------------------------------------------------------------------
 
-function recompute() {
+// prefer: a point just dragged on the plan; its sketch wins the mirror choices of the whole network.
+function recompute(prefer = null) {
     const garden = state.garden;
     const s = garden.settings;
-    const res = snoop(solverInput(garden));
+    const res = snoop(solverInput(garden, prefer));
     const solution = s.autoExclude ? res.solution : res.initial;
     const blocked = new Set(garden.blocked.map(b => pairKey(b.a, b.b)));
     state.result = { solution, suspects: res.suspects };
@@ -372,11 +373,23 @@ const actions = {
 
     // Saves a new sketch position for a point dragged on the plan (x, y in the plan frame), then says
     // whether the computed point followed (jumped to its mirror position) or is fixed by the readings.
+    // The whole network may change: other points follow to the matching solution, and their sketches are
+    // moved with them so the next recompute keeps it.
     movePoint(name, x, y) {
-        const before = state.positions.get(name);
-        const s = state.frame.invert({ x, y });
-        state.store.updatePoint(name, { sketchX: Math.round(s.x * 100) / 100, sketchY: Math.round(s.y * 100) / 100 });
-        refresh();
+        const toSketch = q => {
+            const sk = state.frame.invert(q);
+            return { sketchX: Math.round(sk.x * 100) / 100, sketchY: Math.round(sk.y * 100) / 100 };
+        };
+        const positionsBefore = state.positions;
+        const before = positionsBefore.get(name);
+        state.store.updatePoint(name, toSketch({ x, y }));
+        recompute(name);
+        const follow = followSketches(positionsBefore, state.positions, state.garden.points, state.garden.measurements, name);
+        const now = state.positions.get(name);
+        if (now?.placed) follow.set(name, now); // the sketch moves to where the point ended up
+        for (const [n, q] of follow) state.store.updatePoint(n, toSketch(q));
+        recompute();
+        renderAll();
         const after = state.positions.get(name);
         if (before?.placed && after?.placed) {
             const shift = Math.hypot(after.x - before.x, after.y - before.y);
