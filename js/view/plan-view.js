@@ -3,6 +3,7 @@
 import { escapeHtml, fmt } from '../util.js';
 import { t } from '../i18n.js';
 import { kindOf } from '../solver/observations.js';
+import { WEAK_SXY } from '../solver/planner.js';
 import { isLine, lineEnds, lineKey } from './describe.js';
 import { isPointShown, isMeasurementDrawn, isLineDrawn } from '../model.js';
 
@@ -61,7 +62,8 @@ export function placedBounds(solution, extra = []) {
 // Ellipse exaggeration so that a typical ellipse is visible (power of ten).
 export function autoEllipseScale(solution, pxPerMetre, targetPx = 16) {
     const sizes = [];
-    for (const p of solution.points.values()) if (p.placed && p.status !== 'datum' && p.ellipse.a > 0) sizes.push(p.ellipse.a);
+    // Poorly fixed points get a marker instead of an ellipse, and would only shrink the others.
+    for (const p of solution.points.values()) if (p.placed && p.status !== 'datum' && p.ellipse.a > 0 && !(p.sxy > WEAK_SXY)) sizes.push(p.ellipse.a);
     if (!sizes.length) return 1;
     sizes.sort((a, b) => a - b);
     const median = sizes[Math.floor(sizes.length / 2)];
@@ -211,6 +213,30 @@ export function renderScene(scene, tf, style) {
         }
     }
 
+    // A point whose readings all run one way: a dashed double arrow along the direction it is not fixed in,
+    // with a "?", at a fixed size instead of an ellipse that could be hundreds of metres long.
+    function weakMarker(name, p) {
+        const cx = X(p.x);
+        const cy = Y(p.y);
+        const u = { x: Math.cos(p.ellipse.angle), y: -Math.sin(p.ellipse.angle) }; // screen y points down
+        const n = { x: -u.y, y: u.x };
+        const L = style.font * 2.4;
+        const h = style.font * 0.55;
+        const end = s => ({ x: cx + u.x * L * s, y: cy + u.y * L * s });
+        const head = s => {
+            const E = end(s);
+            const B = { x: E.x - u.x * h * s, y: E.y - u.y * h * s };
+            return `M${B.x + n.x * h * 0.6} ${B.y + n.y * h * 0.6}L${E.x} ${E.y}L${B.x - n.x * h * 0.6} ${B.y - n.y * h * 0.6}`;
+        };
+        const [a, b] = [end(-1), end(1)];
+        const color = '#e64a19';
+        const title = t('weakMarker', { name, sxy: fmt(p.sxy, 1) });
+        const q = { x: b.x + n.x * style.font * 0.5 + u.x * style.font * 0.3, y: b.y + n.y * style.font * 0.5 + u.y * style.font * 0.3 };
+        return `<g fill="none" stroke="${color}" stroke-width="${sw * 1.3}"><title>${escapeHtml(title)}</title>` +
+            `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-dasharray="${sw * 3} ${sw * 2}"/><path d="${head(1)}${head(-1)}"/></g>` +
+            haloText(q.x - style.font * 0.3, q.y + style.font * 0.4, style.font * 1.1, color, '?');
+    }
+
     // Angle mark: at a shared corner a small square (90°) or arc, otherwise a label between the lines.
     function angleMark(m, color, r) {
         const [A, B, C, D] = [m.from, m.fromB, m.to, m.toB].map(n => P.get(n));
@@ -281,6 +307,10 @@ export function renderScene(scene, tf, style) {
         const k = ELLIPSE_K * (options.ellipseScale || 1);
         for (const [name, p] of P) {
             if (!p.placed || p.status === 'datum' || !(p.ellipse.a > 0) || !shownPoint(name)) continue;
+            if (p.sxy > WEAK_SXY) {
+                out.push(weakMarker(name, p));
+                continue;
+            }
             const rx = p.ellipse.a * k * tf.scale;
             const ry = p.ellipse.b * k * tf.scale;
             if (!Number.isFinite(rx) || rx > 1e5) continue;

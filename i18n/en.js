@@ -68,6 +68,7 @@ export default {
     weakReadingNoHint: 'This adds almost nothing to where {name} is (±{sxy} m): it runs the same way as the readings {name} already has. Measure {name} from a point off to the side.',
     stillWeak: '⚠ {name} is placed, but poorly (±{sxy} m): its readings all run one way. Measure {better} to fix it.',
     stillWeakNoHint: '⚠ {name} is placed, but poorly (±{sxy} m): its readings all run one way. Measure it from a point off to the side.',
+    weakMarker: '{name}: not fixed along the arrow (±{sxy} m). Its readings all run one way; measure it from a point off to the side.',
     sketchedOnly: 'sketched only, not measured yet',
     pointMoved: '{name} moved to the matching position.',
     pointFixed: '{name} is fixed by its measurements; the sketch does not change it.',
