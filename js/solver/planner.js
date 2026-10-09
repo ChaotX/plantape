@@ -7,7 +7,7 @@
 // because heights are usually far less certain than plan positions and would otherwise dominate.
 
 import { rowFor, rowForMeasurement, quadForm, qTimesRow, measurementSigma } from './adjust.js';
-import { kindOf, observationSigma } from './observations.js';
+import { kindOf, observationSigma, pointsOfMeasurement } from './observations.js';
 
 export function pairKey(a, b) {
     return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -50,6 +50,37 @@ function gainOf(solution, row, sigma, group, total, zWeight) {
     const xyPct = total.xy > 0 ? (100 * numXY) / denom / total.xy : 0;
     const zPct = total.z > 0 ? (100 * numZ) / denom / total.z : 0;
     return { xyPct, zPct, score: xyPct + zWeight * zPct };
+}
+
+// Plan uncertainty (m) above which a placed point counts as poorly fixed: its readings all run one way, e.g. a
+// circle that only touches a line, or three points in a row.
+export const WEAK_SXY = 0.5;
+
+// What a (possibly hypothetical) reading would do for the poorly fixed points it involves:
+// [{ name, sxy, pct }], pct being the share of the point's plan variance it would remove. A reading that runs
+// the same way as the point's other readings removes almost nothing.
+export function weakPointGains(solution, m) {
+    const row = rowForMeasurement(solution, m);
+    if (!row) return [];
+    const { Q, u } = solution;
+    const sigma = observationSigma({ ...m, distance: Number.isFinite(m.distance) ? m.distance : row.value }, solution.settings);
+    const denom = sigma * sigma + quadForm(solution, row);
+    const qa = qTimesRow(solution, row);
+    const out = [];
+    for (const name of pointsOfMeasurement(m)) {
+        const p = solution.points.get(name);
+        if (!p?.placed || !(p.sxy > WEAK_SXY)) continue;
+        const idx = solution.index.get(name);
+        let before = 0;
+        let removed = 0;
+        for (const k of [idx[0], idx[1]]) {
+            if (k < 0) continue;
+            before += Q[k * u + k];
+            removed += (qa[k] * qa[k]) / denom;
+        }
+        out.push({ name, sxy: p.sxy, pct: before > 0 ? (100 * removed) / before : 0 });
+    }
+    return out;
 }
 
 // Lines (point pairs) the garden already uses as references for offsets or angles: [[a, b]].

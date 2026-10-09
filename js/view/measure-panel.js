@@ -441,6 +441,13 @@ export class MeasurePanel {
             if (check.status === 'suspect') text += ` — ${angle ? t('differsByAngle', { dev: fmt(check.deviation, 1) }) : t('differsBy', { dev: fmt(check.deviation * 100, 1) })}`;
         }
         part.textContent = text;
+        const weak = this.app.actions.weakWarning({ ...m, distance: hasValue ? m.distance : probe.predicted });
+        if (weak) {
+            const div = document.createElement('div');
+            div.className = 'weak';
+            div.textContent = `⚠ ${weak}`;
+            part.append(div);
+        }
     }
 
     renderHistory() {

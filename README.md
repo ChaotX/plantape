@@ -38,6 +38,10 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
 - **Hints:** a ranked list of the measurements that would shrink the plan / height uncertainty most, plus points
   that still need readings. Distances from lines already in use are suggested too. The hints are also drawn on
   the plan.
+- **Readings that don't help:** a reading that runs the same way as the readings a point already has (three
+  points in a row, or a distance that only touches a distance-from-a-line) fixes nothing new. The measuring form
+  warns about it before saving, and after saving the app says when a point is placed but still poorly fixed,
+  with the reading that would fix it.
 - **Typo detection:**
   - Each distance is checked against the expected value as you type it. If it doesn't fit, you get "Did you
     mean 12.45 (swapped digits)?"

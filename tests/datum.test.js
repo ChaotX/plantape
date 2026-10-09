@@ -40,3 +40,19 @@ test('the first automatic datum is kept when a measurement is added', () => {
     assert.deepEqual(at(after, 'A2'), before);
     assert.ok(after.points.get('KapuJobb').sxy < 1, 'the diagonal ties the gate down');
 });
+
+test('a reading in the same direction as the others is recognised as adding nothing to a weak point', async () => {
+    const { weakPointGains } = await import('../js/solver/planner.js');
+    const g = garden();
+    g.settings.origin = 'A1';
+    g.settings.axis = 'A4';
+    const solution = snoop(solverInput(g)).solution;
+    // KapuBal is fixed only by readings along the A4–A1 line.
+    const along = weakPointGains(solution, d('again', 'A4', 'KapuBal', 9));
+    assert.equal(along.length, 1);
+    assert.equal(along[0].name, 'KapuBal');
+    assert.ok(along[0].pct < 1, `along the line: ${along[0].pct}`);
+    const across = weakPointGains(solution, d('x', 'A2', 'KapuBal', Math.hypot(6, 5)));
+    assert.ok(across[0].pct > 90, `across: ${across[0].pct}`);
+    assert.deepEqual(weakPointGains(solution, d('ok', 'A2', 'A3', 3)), [], 'well fixed points are not reported');
+});

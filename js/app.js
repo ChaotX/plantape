@@ -6,7 +6,7 @@ import { pickSpreadsheet, spreadsheetIdFromUrl } from './picker.js';
 import { GoogleStore, LocalStore, recentGardens, rememberGarden, forgetGarden } from './store.js';
 import { solverInput, datumToKeep, gardenFromJson, gardenFromCsv, CATEGORIES, isPointShown, isMeasurementDrawn, isLineDrawn } from './model.js';
 import { snoop, checkMeasurement } from './solver/blunders.js';
-import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey } from './solver/planner.js';
+import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoints, pairKey, weakPointGains, WEAK_SXY } from './solver/planner.js';
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { rectangleMeasurements } from './rectangle.js';
 import { kindOf, pointsOfMeasurement } from './solver/observations.js';
@@ -63,7 +63,7 @@ function toast(message, kind = 'info') {
     el.textContent = message;
     el.className = `toast ${kind}`;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add('hidden'), kind === 'error' ? 6000 : 3000);
+    toastTimer = setTimeout(() => el.classList.add('hidden'), kind === 'error' || kind === 'warn' ? 7000 : 3000);
 }
 
 function closeModal() {
@@ -128,6 +128,40 @@ function offsetLines(garden) {
     const out = new Map(referenceLines(garden.measurements).map(l => [pairKey(...l), l]));
     for (const l of garden.lines || []) out.set(pairKey(l.from, l.to), [l.from, l.to]);
     return [...out.values()];
+}
+
+// The reading that would best fix a poorly fixed point, as text ("A2 → KapuBal"), or ''.
+function betterReading(name) {
+    const { solution } = state.result;
+    const s = state.garden.settings;
+    const blocked = new Set(state.garden.blocked.map(b => pairKey(b.a, b.b)));
+    const involves = h => [h.from, h.to, h.fromB].includes(name);
+    const distance = suggestMeasurements(solution, { tapeLength: s.tapeLength, blocked, use3D: false, maxResults: 200 }).find(involves);
+    const offset = suggestOffsets(solution, { lines: offsetLines(state.garden), tapeLength: s.tapeLength, use3D: false, point: name, maxResults: 20 }).find(involves);
+    // A plain tape distance is easier to take; an offset only when it is clearly better.
+    const best = distance && (!offset || distance.xyPct >= offset.xyPct * 0.5) ? distance : offset;
+    if (!best) return '';
+    return best.kind === 'offset' ? `${best.from}–${best.fromB} ⊥ ${best.to}` : `${best.from} → ${best.to}`;
+}
+
+// Warning for a reading that runs the same way as the other readings of a poorly fixed point, so it would not
+// fix it; '' when it helps or no point it involves is poorly fixed.
+function weakWarning(m) {
+    if (!state.result) return '';
+    const useless = weakPointGains(state.result.solution, m).filter(g => g.pct < 10);
+    return useless.map(g => {
+        const better = betterReading(g.name);
+        return t(better ? 'weakReading' : 'weakReadingNoHint', { name: g.name, sxy: fmt(g.sxy, 1), better });
+    }).join(' ');
+}
+
+// After saving: points of the reading that are placed but still poorly fixed.
+function weakAfterSave(m) {
+    const P = state.result.solution.points;
+    return pointsOfMeasurement(m).filter(n => P.get(n)?.placed && P.get(n).sxy > WEAK_SXY).map(name => {
+        const better = betterReading(name);
+        return t(better ? 'stillWeak' : 'stillWeakNoHint', { name, sxy: fmt(P.get(name).sxy, 1), better });
+    }).join(' ');
 }
 
 // Sketch position (sketch frame) for a point created without tapping the plan: next to the point or line
@@ -404,7 +438,9 @@ function commitMeasurement(m, check, done) {
     recompute();
     renderAll();
     const msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
-    toast(check?.status === 'ok' ? `${msg} ✓ ${t('matchesExpected')}` : msg, 'ok');
+    const weak = weakAfterSave(m);
+    if (weak) toast(`${msg} ${weak}`, 'warn');
+    else toast(check?.status === 'ok' ? `${msg} ✓ ${t('matchesExpected')}` : msg, 'ok');
     done?.();
 }
 
@@ -488,6 +524,7 @@ function confirmDelete(title, text, onConfirm) {
 
 const actions = {
     newPointDialog,
+    weakWarning,
     submitMeasurement,
 
     toggleMeasurement(id, force) {
