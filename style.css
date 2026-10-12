@@ -427,6 +427,9 @@ body.google-on .local-only {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    /* Too tall for the plan (a phone in portrait): a second column to the left, clear of the legend below. */
+    flex-wrap: wrap-reverse;
+    max-height: calc(100% - 56px);
 }
 
 .plan-tools button {
@@ -880,7 +883,9 @@ section + section {
 
 @media (max-width: 820px) {
     #mainScreen {
-        grid-template-columns: 1fr;
+        /* minmax(0, …): the column must not grow to the tab bar's width (it scrolls); otherwise the page gets
+           wider than the phone and the map tools end up off the right edge. */
+        grid-template-columns: minmax(0, 1fr);
         grid-template-rows: 42vh 1fr;
     }
 
@@ -899,6 +904,26 @@ section + section {
 
     .target-list {
         max-height: none;
+    }
+
+    .plan-tools {
+        top: 8px;
+        right: 8px;
+        gap: 4px;
+    }
+
+    .plan-tools button {
+        width: 34px;
+        height: 34px;
+        min-height: 0;
+        font-size: 16px;
+    }
+
+    .layers {
+        left: 8px;
+        right: auto;
+        max-height: calc(100% - 56px);
+        overflow-y: auto;
     }
 }
 
