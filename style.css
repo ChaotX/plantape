@@ -427,9 +427,23 @@ body.google-on .local-only {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    /* Too tall for the plan (a phone in portrait): a second column to the left, clear of the legend below. */
-    flex-wrap: wrap-reverse;
+    /* Too tall for the plan (a phone in portrait): one column that scrolls, clear of the legend below. The
+       padding keeps the button shadows from being cut off by the scrolling. */
     max-height: calc(100% - 56px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    scrollbar-width: none;
+    padding: 2px 4px 4px;
+    margin: -2px -4px 0;
+}
+
+.plan-tools::-webkit-scrollbar {
+    display: none;
+}
+
+.plan-tools button {
+    flex: none;
 }
 
 .plan-tools button {
@@ -920,8 +934,8 @@ section + section {
     }
 
     .layers {
-        left: 8px;
-        right: auto;
+        right: 50px;
+        max-width: calc(100% - 60px);
         max-height: calc(100% - 56px);
         overflow-y: auto;
     }

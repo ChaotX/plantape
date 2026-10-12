@@ -21,6 +21,7 @@ export const CATEGORY_COLORS = {
 
 const VIRIDIS = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];
 const ELLIPSE_K = 2.4477; // √χ²(2 dof, 95 %)
+const TAP_REACH = 28; // px: a tap this close to a point picks it
 
 function hexToRgb(h) {
     const n = parseInt(h.slice(1), 16);
@@ -427,9 +428,10 @@ export function renderOverlay({ tf, x, y, font, stroke, maxBar, zRange, ellipseS
 export class PlanView {
     // handlers: onSelect({ point } | { line: [a, b] }, station) — station is true in select mode (the tap
     // says where I am), onAdd(x, y) in add mode, onMove(name, x, y) in move mode
-    constructor(svg, { onSelect, onAdd, onMove } = {}) {
+    constructor(svg, { onSelect, onAdd, onMove, onMiss } = {}) {
         this.svg = svg;
         this.onSelect = onSelect;
+        this.onMiss = onMiss; // a tap on nothing
         this.onAdd = onAdd;
         this.onMove = onMove;
         this.mode = 'pan'; // 'pan' | 'select' | 'add' | 'move'
@@ -530,6 +532,16 @@ export class PlanView {
         const opt = this.scene?.options?.ellipseScale;
         if (opt && opt !== 'auto') return Number(opt);
         return this.scene?.solution ? autoEllipseScale(this.scene.solution, this.tf.scale) : 1;
+    }
+
+    // Name of the drawn point nearest to screen position p, within reach (px), or null.
+    pointNear(p, reach) {
+        let best = null;
+        for (const el of this.svg.querySelectorAll('circle[data-point]')) {
+            const d = Math.hypot(Number(el.getAttribute('cx')) - p.x, Number(el.getAttribute('cy')) - p.y);
+            if (d <= reach && (!best || d < best.d)) best = { d, name: el.dataset.point };
+        }
+        return best?.name || null;
     }
 
     // Plan coordinates of the middle of the view.
@@ -666,13 +678,17 @@ export class PlanView {
             if (this.moved >= 6 || e.type === 'pointercancel') return;
             this.lastTap = { t: performance.now(), ...this.downAt };
             const station = this.mode === 'select';
-            if (this.downPoint) this.onSelect?.({ point: this.downPoint }, station);
+            // A fingertip often lands just beside a point, or where touch areas of crowded points overlap: the point
+            // nearest to the tap counts, within reach, also over a line (when sketching only a tap on a point picks
+            // it, as a tap beside one adds a new point).
+            const point = this.mode === 'add' ? this.downPoint : this.pointNear(this.downAt, TAP_REACH);
+            if (point) this.onSelect?.({ point }, station);
             else if (this.downLine) this.onSelect?.({ line: lineEnds(this.downLine) }, station);
             else if (this.mode === 'add' && this.tf) {
                 const w = this.toWorld(this.downAt);
                 this.userMoved = true;
                 this.onAdd?.(w.x, w.y);
-            }
+            } else this.onMiss?.();
         };
         svg.addEventListener('pointerup', end);
         svg.addEventListener('pointercancel', end);

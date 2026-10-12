@@ -57,6 +57,7 @@ export default {
     lineOnly: 'Line only',
     lineOnlyHelp: 'Make these two points a line (a wall, fence or side) without measuring it, so it can be used in angles and distances from a line.',
     toolRectHelp: 'Tap the four corners of a rectangle (a house, a terrace, a bed) in order around it.',
+    tapAPoint: 'Tap a point (a dot on the plan).',
     rectCornerHelp: 'Corner {n} of 4 ({corners}): tap the next corner. Tapping the last one again takes it back.',
     rectTitle: 'Rectangle',
     rectText: 'Corners {corners}: the four sides become lines and the corners square (90°).',

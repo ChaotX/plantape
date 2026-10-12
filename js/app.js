@@ -75,6 +75,8 @@ function closeModal() {
 
 // Opens a modal; handlers: { action: fn } called for [data-action] buttons inside; returns the card.
 function openModal(html, handlers = {}) {
+    clearTimeout(toastTimer);
+    $('#toast').classList.add('hidden'); // a message about the step before would cover the dialog
     const card = $('#modalCard');
     card.innerHTML = html;
     $('#modal').classList.remove('hidden');
@@ -690,7 +692,10 @@ const actions = {
     // Line tool: tap one end, then the other; the next tap continues from there (a fence of several sections).
     // Tapping the last point again ends the chain.
     lineTap(sel) {
-        if (!sel.point) return;
+        if (!sel.point) {
+            toast(t('tapAPoint'), 'info');
+            return;
+        }
         const start = state.ui.lineStart;
         if (!start || start === sel.point) {
             state.ui.lineStart = start ? '' : sel.point;
@@ -707,7 +712,10 @@ const actions = {
 
     // Rectangle tool: tap the four corners in order (tapping the last one again takes it back).
     rectTap(sel) {
-        if (!sel.point) return;
+        if (!sel.point) {
+            toast(t('tapAPoint'), 'info');
+            return;
+        }
         const corners = state.ui.rectCorners || (state.ui.rectCorners = []);
         if (corners.at(-1) === sel.point) corners.pop();
         else if (!corners.includes(sel.point)) corners.push(sel.point);
@@ -1010,7 +1018,10 @@ function bindMainScreen() {
     planView = new PlanView($('#plan'), {
         onSelect: (sel, station) => actions.select(sel, station),
         onAdd: (x, y) => newPointDialog('', null, state.frame.invert({ x, y })),
-        onMove: (name, x, y) => actions.movePoint(name, x, y)
+        onMove: (name, x, y) => actions.movePoint(name, x, y),
+        onMiss: () => {
+            if (state.ui.tool === 'rect' || state.ui.tool === 'line') toast(t('tapAPoint'), 'info');
+        }
     });
     panels.measure = new MeasurePanel($('#tab-measure'), app);
     panels.hints = new HintsPanel($('#tab-hints'), app);

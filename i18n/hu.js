@@ -57,6 +57,7 @@ export default {
     lineOnly: 'Csak vonal',
     lineOnlyHelp: 'A két pont legyen vonal (fal, kerítés vagy oldal) mérés nélkül, hogy szögekben és vonaltól mért távolságokban használható legyen.',
     toolRectHelp: 'Koppints sorban körbe egy téglalap (ház, terasz, ágyás) négy sarkára.',
+    tapAPoint: 'Koppints egy pontra (a terven egy pöttyre).',
     rectCornerHelp: '{n}. sarok a 4-ből ({corners}): koppints a következő sarokra. Az utolsóra újra koppintva visszavonod.',
     rectTitle: 'Téglalap',
     rectText: 'Sarkok: {corners}. A négy oldal vonal lesz, a sarkok derékszögek (90°).',
