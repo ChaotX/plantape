@@ -505,3 +505,83 @@ test('measuring the same thing again updates its row: value, note and timestamp'
     assert.deepEqual(['distance', 'note', 'timestamp'].map(c => row[h.indexOf(c)]), [8.02, 'again', '2026-10-13 10:00:00']);
     assert.equal(rows.length, 6, 'no row added');
 });
+
+// ---- Undo / redo -----------------------------------------------------------------------------------
+
+const measured = store => sheetRows(store.id, 'Measurements').slice(1).map(r => r[0]).sort();
+
+test('undo / redo: one action is one step, in the garden and in the sheet', async () => {
+    const store = await seededStore();
+    store.resetHistory();
+    store.transaction({ key: 'step_measure' }, () => {
+        store.addPoint({ name: 'E', category: '', notes: '' });
+        store.addMeasurement({ id: 'mE', timestamp: 't', from: 'A', fromH: 0, to: 'E', toH: 0, distance: 3, status: 'active', note: '' });
+    });
+    await store.flush();
+    assert.ok(store.canUndo && !store.canRedo);
+    assert.deepEqual(store.undoLabel, { key: 'step_measure' });
+    store.undo();
+    await store.flush();
+    assert.ok(!store.garden.points.some(p => p.name === 'E') && !store.garden.measurements.some(m => m.id === 'mE'));
+    assert.ok(!measured(store).includes('mE') && !sheetRows(store.id, 'Points').some(r => r[0] === 'E'));
+    assert.ok(store.canRedo);
+    store.redo();
+    await store.flush();
+    assert.ok(measured(store).includes('mE') && sheetRows(store.id, 'Points').some(r => r[0] === 'E'));
+    assert.ok(!store.canRedo);
+});
+
+test('undo brings a deleted reading back with its id, and an update back to its old value', async () => {
+    const store = await seededStore();
+    store.resetHistory();
+    store.updateMeasurement('m1', { distance: 8.5, note: 'typo' });
+    store.deleteMeasurement('m2');
+    await store.flush();
+    store.undo(); // the delete
+    await store.flush();
+    assert.ok(measured(store).includes('m2'), 'row back, same id');
+    assert.equal(store.garden.measurements.find(m => m.id === 'm2').distance, 6);
+    store.undo(); // the update
+    await store.flush();
+    const [h, ...rows] = sheetRows(store.id, 'Measurements');
+    const m1 = rows.find(r => r[0] === 'm1');
+    assert.deepEqual([m1[h.indexOf('distance')], m1[h.indexOf('note')]], [8, '']);
+    assert.ok(!store.canUndo);
+});
+
+test('a new action empties the redo list; settings undo to the last saved ones; automatic saves are no step', async () => {
+    const store = await seededStore();
+    store.resetHistory();
+    store.saveSettings({ ...store.garden.settings, tapeLength: 50 });
+    store.saveSettings({ ...store.garden.settings, origin: 'A', axis: 'B' }, { record: false });
+    assert.equal(store.undoSteps.length, 1, 'the automatic save is not a step');
+    store.undo();
+    assert.equal(store.garden.settings.tapeLength, 30);
+    assert.ok(store.canRedo);
+    store.addBlocked('A', 'D');
+    assert.ok(!store.canRedo, 'redo list emptied');
+    store.undo();
+    await store.flush();
+    assert.deepEqual(store.garden.blocked, []);
+    assert.deepEqual(sheetRows(store.id, 'Blocked').slice(1).filter(r => r.length), []);
+});
+
+test('undoing the delete of a row typed by hand gives it a real id; redo deletes that row again', async () => {
+    const id = 'manual-undo';
+    books.set(id, { title: 'Typed', sheets: new Map([['Measurements', [['from', 'to', 'distance'], ['A', 'B', 10], ['A', 'C', 8], ['B', 'C', 6]]]]) });
+    const store = new GoogleStore(id);
+    await store.load();
+    store.deleteMeasurement('row-3');
+    await store.flush();
+    assert.equal(store.garden.measurements.length, 2);
+    store.undo();
+    await store.flush();
+    const back = store.garden.measurements.find(m => m.from === 'A' && m.to === 'C');
+    assert.ok(back && /^m-/.test(back.id), JSON.stringify(back));
+    const rows = sheetRows(id, 'Measurements');
+    assert.equal(rows.length, 4);
+    store.redo();
+    await store.flush();
+    assert.ok(!store.garden.measurements.some(m => m.from === 'A' && m.to === 'C'));
+    assert.equal(sheetRows(id, 'Measurements').filter(r => r.length).length, 3);
+});

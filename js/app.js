@@ -114,7 +114,7 @@ function recompute(prefer = null, dropAt = null) {
     if (keep) {
         // Same points as the solution used, so it needs no recompute.
         Object.assign(s, keep);
-        state.store.saveSettings(s);
+        state.store.saveSettings(s, { record: false });
     }
     const blocked = new Set(garden.blocked.map(b => pairKey(b.a, b.b)));
     state.result = { solution, suspects: res.suspects };
@@ -245,6 +245,7 @@ function renderAll() {
     panels[state.ui.tab]?.render();
     renderTabs();
     renderSync(state.store.sync);
+    renderHistoryButtons();
 }
 
 function refresh() {
@@ -431,7 +432,7 @@ function newPointDialog(initialName, onCreated, sketch = null) {
             }
             const point = { name, category, notes: card.querySelector('#pointNotesInput').value.trim(), visible: card.querySelector('#pointVisibleInput').checked };
             Object.assign(point, { sketchX: Math.round(sketch.x * 100) / 100, sketchY: Math.round(sketch.y * 100) / 100 });
-            state.store.addPoint(point);
+            step('step_addPoint', { name }, () => state.store.addPoint(point));
             closeModal();
             refresh();
             onCreated?.(name);
@@ -459,29 +460,31 @@ function solutionWithout(earlier) {
 function commitMeasurement(m, check, done) {
     const earlier = earlierReadings(m);
     let msg;
-    if (earlier.length) {
-        // The same thing measured again: the latest stored reading takes the new value, older copies go.
-        const keep = earlier[earlier.length - 1];
-        const flip = sameReading(keep, m).flip;
-        const changes = {
-            distance: flip ? normalizeAngle(180 - m.distance) : m.distance,
-            raw: flip ? undefined : m.raw,
-            timestamp: nowStamp(),
-            note: m.note || keep.note || '',
-            status: 'active'
-        };
-        const was = formatValue(keep, unit());
-        state.store.updateMeasurement(keep.id, changes);
-        const older = earlier.slice(0, -1);
-        for (const x of older) state.store.deleteMeasurement(x.id);
-        msg = t('updated', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()), was }) + (older.length ? ` ${t('olderRemoved', { n: older.length })}` : '');
-    } else {
-        const measurement = { id: uid('m'), timestamp: nowStamp(), status: 'active', ...m };
-        delete measurement.typed;
-        if (!measurement.raw) delete measurement.raw;
-        state.store.addMeasurement(measurement);
-        msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
-    }
+    step(earlier.length ? 'step_updateMeasurement' : 'step_addMeasurement', { what: describeMeasurement(m, { heights: false }) }, () => {
+        if (earlier.length) {
+            // The same thing measured again: the latest stored reading takes the new value, older copies go.
+            const keep = earlier[earlier.length - 1];
+            const flip = sameReading(keep, m).flip;
+            const changes = {
+                distance: flip ? normalizeAngle(180 - m.distance) : m.distance,
+                raw: flip ? undefined : m.raw,
+                timestamp: nowStamp(),
+                note: m.note || keep.note || '',
+                status: 'active'
+            };
+            const was = formatValue(keep, unit());
+            state.store.updateMeasurement(keep.id, changes);
+            const older = earlier.slice(0, -1);
+            for (const x of older) state.store.deleteMeasurement(x.id);
+            msg = t('updated', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()), was }) + (older.length ? ` ${t('olderRemoved', { n: older.length })}` : '');
+        } else {
+            const measurement = { id: uid('m'), timestamp: nowStamp(), status: 'active', ...m };
+            delete measurement.typed;
+            if (!measurement.raw) delete measurement.raw;
+            state.store.addMeasurement(measurement);
+            msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
+        }
+    });
     recompute();
     renderAll();
     const weak = weakAfterSave(m);
@@ -613,18 +616,46 @@ function rectangleDialog(corners) {
 function addRectangle(corners, parallel) {
     const parallelTo = parallel ? lineEnds(parallel) : null;
     const { lines, measurements } = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 });
-    // The sides become lines even where they are measured, so deleting a measurement later keeps the side.
-    for (const l of lines) state.store.addLine({ ...l, visible: true });
     const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
         ((sameLine(m.from, m.fromB, x.from, x.fromB) && sameLine(m.to, m.toB, x.to, x.toB)) || (sameLine(m.from, m.fromB, x.to, x.toB) && sameLine(m.to, m.toB, x.from, x.fromB)));
     let added = 0;
-    for (const m of measurements) {
-        if (state.garden.measurements.some(x => sameAngle(m, x))) continue;
-        state.store.addMeasurement({ id: uid('m'), timestamp: nowStamp(), note: t('rectNote'), visible: state.garden.settings.newMeasurementsVisible, ...m });
-        added++;
-    }
+    step('step_rectangle', { corners: corners.join(' → ') }, () => {
+        // The sides become lines even where they are measured, so deleting a measurement later keeps the side.
+        for (const l of lines) state.store.addLine({ ...l, visible: true });
+        for (const m of measurements) {
+            if (state.garden.measurements.some(x => sameAngle(m, x))) continue;
+            state.store.addMeasurement({ id: uid('m'), timestamp: nowStamp(), note: t('rectNote'), visible: state.garden.settings.newMeasurementsVisible, ...m });
+            added++;
+        }
+    });
     refresh();
     toast(t('rectAdded', { n: added }), 'ok');
+}
+
+// ---- Undo / redo ----------------------------------------------------------------------------------
+
+// Runs fn as one undo step, shown as t(key, params).
+function step(key, params, fn) {
+    return state.store.transaction({ key, params }, fn);
+}
+
+const stepText = label => (label ? t(label.key, label.params || {}) : '');
+
+function renderHistoryButtons() {
+    const store = state.store;
+    const undo = $('#undoButton');
+    const redo = $('#redoButton');
+    undo.disabled = !store?.canUndo;
+    redo.disabled = !store?.canRedo;
+    undo.title = store?.canUndo ? t('undoTitle', { what: stepText(store.undoLabel) }) : t('nothingToUndo');
+    redo.title = store?.canRedo ? t('redoTitle', { what: stepText(store.redoLabel) }) : t('nothingToRedo');
+}
+
+// After back / next: everything is computed and drawn again, and the step is named.
+function afterHistoryStep(done, key) {
+    refresh();
+    if (state.ui.tab === 'settings') panels.settings.render();
+    toast(t(key, { what: stepText(done.label) }), 'info');
 }
 
 function confirmDelete(title, text, onConfirm) {
@@ -648,7 +679,7 @@ const actions = {
         const m = state.garden.measurements.find(x => x.id === id);
         if (!m) return;
         const status = force || (m.status === 'excluded' ? 'active' : 'excluded');
-        state.store.updateMeasurement(id, { status });
+        step(status === 'excluded' ? 'step_exclude' : 'step_include', { what: describeMeasurement(m, { heights: false }) }, () => state.store.updateMeasurement(id, { status }));
         refresh();
     },
 
@@ -656,14 +687,14 @@ const actions = {
         const m = state.garden.measurements.find(x => x.id === id);
         if (!m) return;
         const note = [m.note, t('correctedFrom', { value: formatValue(m, unit()) })].filter(Boolean).join(' ');
-        state.store.updateMeasurement(id, { distance: value, note, raw: undefined, status: 'active' });
+        step('step_updateMeasurement', { what: describeMeasurement(m, { heights: false }) }, () => state.store.updateMeasurement(id, { distance: value, note, raw: undefined, status: 'active' }));
         toast(t('corrected', { value: formatValue({ ...m, distance: value }, unit()), kind: t(`kind_${kind}`) }), 'ok');
         refresh();
     },
 
     blockPair(a, b) {
         if (!a || !b) return;
-        state.store.addBlocked(a, b);
+        step('step_block', { a, b }, () => state.store.addBlocked(a, b));
         toast(t('blockedSaved', { a, b }), 'info');
         refresh();
     },
@@ -685,15 +716,17 @@ const actions = {
         };
         const positionsBefore = state.positions;
         const before = positionsBefore.get(name);
-        state.store.updatePoint(name, toSketch({ x, y }));
-        recompute(name, { x, y });
-        const follow = followSketches(positionsBefore, state.positions, state.garden.points, state.garden.measurements, name);
-        const now = state.positions.get(name);
-        if (now?.placed) follow.set(name, now); // the sketch moves to where the point ended up
-        // Points the readings leave free went where the drag took them (unless they come along with a computed
-        // point they are tied to): their sketches go there too, so they stay.
-        for (const [n, q] of state.positions) if (q.free && !follow.has(n)) follow.set(n, q);
-        for (const [n, q] of follow) state.store.updatePoint(n, toSketch(q));
+        step('step_move', { name }, () => {
+            state.store.updatePoint(name, toSketch({ x, y }));
+            recompute(name, { x, y });
+            const follow = followSketches(positionsBefore, state.positions, state.garden.points, state.garden.measurements, name);
+            const now = state.positions.get(name);
+            if (now?.placed) follow.set(name, now); // the sketch moves to where the point ended up
+            // Points the readings leave free went where the drag took them (unless they come along with a computed
+            // point they are tied to): their sketches go there too, so they stay.
+            for (const [n, q] of state.positions) if (q.free && !follow.has(n)) follow.set(n, q);
+            for (const [n, q] of follow) state.store.updatePoint(n, toSketch(q));
+        });
         recompute();
         renderAll();
         const after = state.positions.get(name);
@@ -780,7 +813,7 @@ const actions = {
             toast(t('lineExists', { line: `${a}–${b}` }), 'info');
             return;
         }
-        state.store.addLine({ from: a, to: b, visible: true });
+        step('step_addLine', { line: `${a}–${b}` }, () => state.store.addLine({ from: a, to: b, visible: true }));
         refresh();
         toast(t('lineAdded', { line: `${a}–${b}` }), 'ok');
     },
@@ -788,13 +821,18 @@ const actions = {
     deleteLine(a, b) {
         const used = state.garden.measurements.filter(m => kindOf(m) !== 'distance' && (sameLine(a, b, m.from, m.fromB) || (kindOf(m) === 'angle' && sameLine(a, b, m.to, m.toB))));
         confirmDelete(t('deleteLineTitle', { line: `${a}–${b}` }), used.length ? t('deleteLineTextUsed', { n: used.length }) : t('deleteLineText'), () => {
-            state.store.deleteLine(a, b);
+            step('step_deleteLine', { line: `${a}–${b}` }, () => state.store.deleteLine(a, b));
             refresh();
         });
     },
 
     // Shown on the plan or not: { point: name }, { measurement: id } or { line: [a, b] }.
     toggleVisible(item) {
+        state.store.transaction({ key: 'step_visible' }, () => actions.setVisible(item));
+        refresh();
+    },
+
+    setVisible(item) {
         if (item.point) {
             const p = state.garden.points.find(x => x.name === item.point);
             if (p) state.store.updatePoint(p.name, { visible: !isPointShown(p) });
@@ -805,7 +843,6 @@ const actions = {
             const m = state.garden.measurements.find(x => x.id === item.measurement);
             if (m) state.store.updateMeasurement(m.id, { visible: !isMeasurementDrawn(m) });
         }
-        refresh();
     },
 
     setTool(tool, { quiet = false } = {}) {
@@ -859,8 +896,20 @@ const actions = {
     },
 
     saveSettings() {
-        state.store.saveSettings(state.garden.settings);
+        step('step_settings', {}, () => state.store.saveSettings(state.garden.settings));
         rememberGarden({ type: state.store.type, id: state.store.id, name: state.store.title });
+        renderHistoryButtons();
+    },
+
+    // Back / next through the user's changes to the garden (store.js keeps the steps).
+    undo() {
+        const done = state.store?.undo();
+        if (done) afterHistoryStep(done, 'undone');
+    },
+
+    redo() {
+        const done = state.store?.redo();
+        if (done) afterHistoryStep(done, 'redone');
     },
 
     async writeResults() {
@@ -886,7 +935,7 @@ const actions = {
         const m = state.garden.measurements.find(x => x.id === id);
         if (!m) return;
         confirmDelete(t('deleteMeasurementTitle'), t('deleteMeasurementText', { what: describeMeasurement(m), d: formatValue(m, unit()) }), () => {
-            state.store.deleteMeasurement(id);
+            step('step_deleteMeasurement', { what: describeMeasurement(m, { heights: false }) }, () => state.store.deleteMeasurement(id));
             refresh();
         });
     },
@@ -898,13 +947,15 @@ const actions = {
         const lines = (state.garden.lines || []).filter(l => l.from === name || l.to === name);
         const n = used.length + lines.length;
         confirmDelete(t('deletePointTitle', { name }), n ? t('deletePointText', { name, n }) : t('deletePointTextUnused', { name }), () => {
-            for (const m of used) state.store.deleteMeasurement(m.id);
-            for (const l of lines) state.store.deleteLine(l.from, l.to);
-            state.store.deletePoint(name);
-            const s = state.garden.settings;
-            const datum = ['origin', 'axis', 'side'].filter(key => s[key] === name);
-            for (const key of datum) s[key] = '';
-            if (datum.length) actions.saveSettings();
+            step('step_deletePoint', { name }, () => {
+                for (const m of used) state.store.deleteMeasurement(m.id);
+                for (const l of lines) state.store.deleteLine(l.from, l.to);
+                state.store.deletePoint(name);
+                const s = state.garden.settings;
+                const datum = ['origin', 'axis', 'side'].filter(key => s[key] === name);
+                for (const key of datum) s[key] = '';
+                if (datum.length) actions.saveSettings();
+            });
             const involves = key => key === name || (isLine(key) && lineEnds(key).includes(name));
             for (const key of ['station', 'target', 'selected']) if (involves(state.ui[key])) state.ui[key] = '';
             refresh();
@@ -1086,6 +1137,8 @@ function bindMainScreen() {
     $('#lineButton').addEventListener('click', () => actions.setTool('line'));
     $('#rectButton').addEventListener('click', () => actions.setTool('rect'));
     $('#rotateButton').addEventListener('click', () => actions.rotate());
+    $('#undoButton').addEventListener('click', () => actions.undo());
+    $('#redoButton').addEventListener('click', () => actions.redo());
     $('#layersButton').addEventListener('click', () => {
         renderLayersMenu();
         $('#layersMenu').classList.toggle('hidden');
@@ -1116,6 +1169,16 @@ function bindMainScreen() {
     });
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') closeModal();
+        // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, except while typing (the field undoes its own text) or in a dialog.
+        const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing && state.garden && $('#modal').classList.contains('hidden')) {
+            const key = e.key.toLowerCase();
+            if (key === 'z' || key === 'y') {
+                e.preventDefault();
+                if (key === 'y' || e.shiftKey) actions.redo();
+                else actions.undo();
+            }
+        }
     });
 }
 

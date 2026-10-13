@@ -15,6 +15,12 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   become measurable.
 - **Measuring assistant:** "I'm at point S" lists the reachable points with estimated distances and the value of
   measuring each one. New points can be named on the spot.
+- **Back / next (undo / redo):** the arrows in the top left corner of the plan (or Ctrl+Z, Ctrl+Shift+Z /
+  Ctrl+Y) step back and forward through your changes; their tooltips say what they would undo or redo. One
+  action is one step (deleting a point with its readings, a rectangle, a drag with the points that followed
+  it). A new change after going back drops the steps you went back over. The history lasts while the garden
+  is open; the sheet follows every step (a reading brought back is added at the end of the tab, with its id).
+  Edits made directly in the sheet are not part of it.
 - **One value per reading:** measuring the same thing again (the same two points at the same tape heights,
   the same point from the same line, or the same two lines) replaces the stored value; the button then says
   **Update**, and the new value is checked against the other readings only. Older copies of the same reading

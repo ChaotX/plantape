@@ -76,6 +76,11 @@ function applyOp(garden, op) {
         case 'addBlocked':
             garden.blocked.push({ a: op.a, b: op.b });
             break;
+        case 'deleteBlocked': {
+            const i = garden.blocked.findIndex(b => samePair({ from: b.a, to: b.b }, { from: op.a, to: op.b }));
+            if (i >= 0) garden.blocked.splice(i, 1);
+            break;
+        }
         case 'saveSettings':
             garden.settings = { ...op.settings };
             break;
@@ -84,11 +89,163 @@ function applyOp(garden, op) {
     }
 }
 
+// ---- Undo / redo ----------------------------------------------------------------------------------
+// Every change records the operation that reverses it, computed from the garden just before. One user action
+// (a transaction) is one step, however many operations it makes. Undo applies a step's reverses, newest
+// first; redo applies its operations again. A new action empties the redo list. The history lives as long as
+// the open garden (this store); undone and redone operations reach the sheet like any other change.
+
+const HISTORY_LIMIT = 100;
+const copy = v => JSON.parse(JSON.stringify(v ?? null));
+const pick = (obj, keys) => Object.fromEntries(keys.map(k => [k, obj?.[k]]));
+const isSyntheticId = id => /^row-\d+$/.test(String(id ?? ''));
+
+// The operation that undoes op, from the garden before it (savedSettings: the settings last saved), or null
+// when op would change nothing.
+function inverseOf(garden, op, savedSettings) {
+    const point = name => garden.points.find(x => x.name === name);
+    const meas = id => garden.measurements.find(x => x.id === id);
+    const line = l => (garden.lines || []).find(x => samePair(x, l));
+    switch (op.type) {
+        case 'addPoint':
+            return point(op.point.name) ? null : { type: 'deletePoint', name: op.point.name };
+        case 'deletePoint':
+            return point(op.name) ? { type: 'addPoint', point: copy(point(op.name)) } : null;
+        case 'updatePoint':
+            return point(op.name) ? { type: 'updatePoint', name: op.name, changes: pick(point(op.name), Object.keys(op.changes)) } : null;
+        case 'addMeasurement':
+            return meas(op.measurement.id) ? null : { type: 'deleteMeasurement', id: op.measurement.id };
+        case 'deleteMeasurement': {
+            const m = meas(op.id);
+            if (!m) return null;
+            const { needsId, ...record } = copy(m);
+            return { type: 'addMeasurement', measurement: record };
+        }
+        case 'updateMeasurement':
+            return meas(op.id) ? { type: 'updateMeasurement', id: op.id, changes: pick(meas(op.id), Object.keys(op.changes)) } : null;
+        case 'addLine':
+            return line(op.line) ? null : { type: 'deleteLine', line: { from: op.line.from, to: op.line.to } };
+        case 'deleteLine':
+            return line(op.line) ? { type: 'addLine', line: copy(line(op.line)) } : null;
+        case 'updateLine':
+            return line(op.line) ? { type: 'updateLine', line: op.line, changes: pick(line(op.line), Object.keys(op.changes)) } : null;
+        case 'addBlocked':
+            return { type: 'deleteBlocked', a: op.a, b: op.b };
+        case 'deleteBlocked':
+            return garden.blocked.some(b => samePair({ from: b.a, to: b.b }, { from: op.a, to: op.b })) ? { type: 'addBlocked', a: op.a, b: op.b } : null;
+        case 'saveSettings':
+            return { type: 'saveSettings', settings: copy(savedSettings) };
+        default:
+            return null;
+    }
+}
+
 class BaseStore {
     constructor() {
         this.garden = emptyGarden();
         this.listeners = new Set();
         this.sync = { state: 'ok', pending: 0, message: '' };
+        this.resetHistory();
+    }
+
+    // Starts an empty history from the garden as it is (after loading).
+    resetHistory() {
+        this.undoSteps = [];
+        this.redoSteps = [];
+        this.step = null; // the transaction being recorded
+        this.replaying = false;
+        this.savedSettings = copy(this.garden.settings);
+    }
+
+    // Runs fn, recording every change it makes as one undo step. label: { key, params } for the app to show.
+    // A transaction inside another one is part of the outer step.
+    transaction(label, fn) {
+        if (this.step) return fn();
+        this.step = { label, entries: [] };
+        try {
+            return fn();
+        } finally {
+            const step = this.step;
+            this.step = null;
+            if (step.entries.length) {
+                this.undoSteps.push(step);
+                if (this.undoSteps.length > HISTORY_LIMIT) this.undoSteps.shift();
+                this.redoSteps = [];
+            }
+        }
+    }
+
+    get canUndo() {
+        return this.undoSteps.length > 0;
+    }
+
+    get canRedo() {
+        return this.redoSteps.length > 0;
+    }
+
+    // Label of the step that undo / redo would apply, or null.
+    get undoLabel() {
+        return this.undoSteps.at(-1)?.label || null;
+    }
+
+    get redoLabel() {
+        return this.redoSteps.at(-1)?.label || null;
+    }
+
+    // Undoes the latest step; returns it (or null when there is none).
+    undo() {
+        const step = this.undoSteps.pop();
+        if (!step) return null;
+        this.replay(() => {
+            for (const e of [...step.entries].reverse()) this.mutate(e.inverse);
+        });
+        this.redoSteps.push(step);
+        return step;
+    }
+
+    redo() {
+        const step = this.redoSteps.pop();
+        if (!step) return null;
+        this.replay(() => {
+            for (const e of step.entries) this.mutate(e.redo || e.op);
+        });
+        this.undoSteps.push(step);
+        return step;
+    }
+
+    replay(fn) {
+        this.replaying = true;
+        try {
+            fn();
+        } finally {
+            this.replaying = false;
+        }
+    }
+
+    // Records op (with its reverse) in the current step, or as a step of its own outside a transaction.
+    record(op) {
+        const inverse = inverseOf(this.garden, op, this.savedSettings);
+        if (!inverse) return;
+        const entry = { op, inverse };
+        // A row typed by hand without an id is known by its row number, which deleting it frees: brought back,
+        // it gets a real id, and redoing the delete then deletes that one.
+        if (op.type === 'deleteMeasurement' && isSyntheticId(op.id)) {
+            const id = uid('m');
+            entry.inverse = { ...inverse, measurement: { ...inverse.measurement, id } };
+            entry.redo = { type: 'deleteMeasurement', id };
+        }
+        if (this.step) this.step.entries.push(entry);
+        else this.transaction({ key: 'step_change' }, () => this.step.entries.push(entry));
+    }
+
+    // Measurement ids renamed (rows typed by hand that got a real id): the history follows.
+    renameInHistory(renamed) {
+        const fix = op => {
+            if (!op) return;
+            if (renamed.has(op.id)) op.id = renamed.get(op.id);
+            if (op.measurement && renamed.has(op.measurement.id)) op.measurement.id = renamed.get(op.measurement.id);
+        };
+        for (const step of [...this.undoSteps, ...this.redoSteps]) for (const e of step.entries) [e.op, e.inverse, e.redo].forEach(fix);
     }
 
     onSync(fn) {
@@ -109,7 +266,10 @@ class BaseStore {
         (this.changeListeners ||= new Set()).add(fn);
     }
 
-    mutate(op) {
+    // options.record: false for changes that are not the user's (the automatically kept datum).
+    mutate(op, { record = true } = {}) {
+        if (record && !this.replaying) this.record(op);
+        if (op.type === 'saveSettings') this.savedSettings = copy(op.settings);
         applyOp(this.garden, op);
         for (const fn of this.changeListeners || []) fn(op);
         return this.persist(op);
@@ -159,8 +319,13 @@ class BaseStore {
         return this.mutate({ type: 'addBlocked', a, b });
     }
 
-    saveSettings(settings) {
-        return this.mutate({ type: 'saveSettings', settings: { ...settings } });
+    deleteBlocked(a, b) {
+        return this.mutate({ type: 'deleteBlocked', a, b });
+    }
+
+    // options.record: false when the app keeps a choice it made itself (not a step to undo).
+    saveSettings(settings, options = {}) {
+        return this.mutate({ type: 'saveSettings', settings: { ...settings } }, options);
     }
 }
 
@@ -196,6 +361,7 @@ export class LocalStore extends BaseStore {
         const text = storage.get(`plantape:local:${this.id}`);
         if (!text) throw new Error('Local garden not found');
         this.garden = gardenFromJson(text);
+        this.resetHistory();
         this.setSync('local');
         return this.garden;
     }
@@ -287,6 +453,7 @@ export class GoogleStore extends BaseStore {
             this.offlineLoaded = true;
         }
         for (const op of this.queue) applyOp(this.garden, op);
+        this.resetHistory();
         this.setSync(this.queue.length ? 'pending' : 'ok');
         this.flush();
         return this.garden;
@@ -381,6 +548,15 @@ export class GoogleStore extends BaseStore {
             case 'addBlocked':
                 await sheets.appendRows(this.id, TABS.blocked, [recordToRow(this.headers('blocked'), { from: op.a, to: op.b })]);
                 break;
+            case 'deleteBlocked': {
+                const headers = this.headers('blocked');
+                const [fromCol, toCol] = [headers.indexOf('from'), headers.indexOf('to')];
+                if (fromCol < 0 || toCol < 0) break;
+                const [values] = await sheets.batchGet(this.id, [quoteSheet(TABS.blocked)]);
+                const idx = values.findIndex((row, i) => i > 0 && samePair({ from: String(row[fromCol] ?? '').trim(), to: String(row[toCol] ?? '').trim() }, { from: op.a, to: op.b }));
+                if (idx > 0) await this.deleteRow(TABS.blocked, idx + 1);
+                break;
+            }
             case 'saveSettings':
                 await sheets.clearRange(this.id, `${quoteSheet(TABS.settings)}!A2:B`);
                 await sheets.batchUpdateValues(this.id, [{ range: `${quoteSheet(TABS.settings)}!A1`, values: [HEADERS.settings, ...settingsToRows(op.settings)] }]);
@@ -474,6 +650,7 @@ export class GoogleStore extends BaseStore {
             m.needsId = false;
         }
         for (const q of this.queue) if (renamed.has(q.id)) q.id = renamed.get(q.id);
+        this.renameInHistory(renamed);
         storage.set(this.queueKey, this.queue);
         this.saveCache();
         return renamed;

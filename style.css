@@ -438,6 +438,27 @@ body.google-on .local-only {
     margin: -2px -4px 0;
 }
 
+/* Back / next: the top left corner of the plan. */
+.plan-history {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    display: flex;
+    gap: 6px;
+}
+
+.plan-history button {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.plan-history button:disabled {
+    opacity: 0.35;
+    box-shadow: none;
+}
+
 .plan-tools::-webkit-scrollbar {
     display: none;
 }
@@ -926,11 +947,18 @@ section + section {
         gap: 4px;
     }
 
-    .plan-tools button {
+    .plan-tools button,
+    .plan-history button {
         width: 34px;
         height: 34px;
         min-height: 0;
         font-size: 16px;
+    }
+
+    .plan-history {
+        top: 8px;
+        left: 8px;
+        gap: 4px;
     }
 
     .layers {
