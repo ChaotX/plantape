@@ -496,3 +496,12 @@ test('with a known north the sheet gets east / north columns', async () => {
     const b = rows.find(r => r[0] === 'B');
     assert.ok(Math.abs(b[h.indexOf('north')] + b[h.indexOf('x')]) < 1e-3 && Math.abs(b[h.indexOf('east')] + b[h.indexOf('y')]) < 1e-3, JSON.stringify(b));
 });
+
+test('measuring the same thing again updates its row: value, note and timestamp', async () => {
+    const store = await seededStore();
+    await store.updateMeasurement('m1', { distance: 8.02, note: 'again', timestamp: '2026-10-13 10:00:00' });
+    const [h, ...rows] = sheetRows(store.id, 'Measurements');
+    const row = rows.find(r => r[0] === 'm1');
+    assert.deepEqual(['distance', 'note', 'timestamp'].map(c => row[h.indexOf(c)]), [8.02, 'again', '2026-10-13 10:00:00']);
+    assert.equal(rows.length, 6, 'no row added');
+});

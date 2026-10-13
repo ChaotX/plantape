@@ -46,6 +46,26 @@ export function resolveAngle(typed, current) {
     return Math.abs(angleDiff(b, current)) < Math.abs(angleDiff(a, current)) - 1e-9 ? b : a;
 }
 
+// Is b a reading of the same thing as a, so that a later one replaces the earlier? Distances: the same two
+// points with the same tape height at each end, in either direction; offsets: the same point from the same
+// line; angles: the same two lines in either order. Returns null if not, else { flip }: for angles between the
+// lines picked the other way round, a's value reads 180° − θ in b's order.
+export function sameReading(a, b) {
+    const k = kindOf(a);
+    if (k !== kindOf(b)) return null;
+    const line = (p, q, r, s) => (p === r && q === s) || (p === s && q === r);
+    const h = (x, y) => Math.abs((x || 0) - (y || 0)) < 1e-9;
+    if (k === 'distance') {
+        const fwd = a.from === b.from && a.to === b.to && h(a.fromH, b.fromH) && h(a.toH, b.toH);
+        const back = a.from === b.to && a.to === b.from && h(a.fromH, b.toH) && h(a.toH, b.fromH);
+        return fwd || back ? { flip: false } : null;
+    }
+    if (k === 'offset') return a.to === b.to && line(a.from, a.fromB, b.from, b.fromB) ? { flip: false } : null;
+    if (line(a.from, a.fromB, b.from, b.fromB) && line(a.to, a.toB, b.to, b.toB)) return { flip: false };
+    if (line(a.from, a.fromB, b.to, b.toB) && line(a.to, a.toB, b.from, b.fromB)) return { flip: true };
+    return null;
+}
+
 export function isValidMeasurement(m) {
     const k = kindOf(m);
     if (!Number.isFinite(m.distance)) return false;

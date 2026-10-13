@@ -11,7 +11,7 @@ import { suggestMeasurements, suggestOffsets, referenceLines, underdeterminedPoi
 import { layoutPositions, freeSpotNear, followSketches } from './positions.js';
 import { rectangleMeasurements } from './rectangle.js';
 import { orientation } from './orientation.js';
-import { kindOf, pointsOfMeasurement, isRule } from './solver/observations.js';
+import { kindOf, pointsOfMeasurement, isRule, sameReading, normalizeAngle } from './solver/observations.js';
 import { lineKey, isLine, lineEnds, sameLine, availableLines, describeMeasurement, formatValue, formatExpected } from './view/describe.js';
 import { PlanView, CATEGORY_COLORS } from './view/plan-view.js';
 import { MeasurePanel } from './view/measure-panel.js';
@@ -442,14 +442,48 @@ function newPointDialog(initialName, onCreated, sketch = null) {
     });
 }
 
+// Stored readings of the same thing as m (not excluded), oldest first: a new one replaces them.
+function earlierReadings(m) {
+    return state.garden.measurements.filter(x => x.status !== 'excluded' && sameReading(x, m));
+}
+
+// The solution to check m against: without the readings it replaces (and without the suspected typos), so a
+// corrected value is not judged by the value it corrects.
+function solutionWithout(earlier) {
+    if (!earlier.length) return state.result.solution;
+    const exclude = new Set(earlier.map(x => x.id));
+    if (state.garden.settings.autoExclude) for (const s of state.result.suspects) exclude.add(s.id);
+    return solveNetwork(solverInput(state.garden), { exclude });
+}
+
 function commitMeasurement(m, check, done) {
-    const measurement = { id: uid('m'), timestamp: nowStamp(), status: 'active', ...m };
-    delete measurement.typed;
-    if (!measurement.raw) delete measurement.raw;
-    state.store.addMeasurement(measurement);
+    const earlier = earlierReadings(m);
+    let msg;
+    if (earlier.length) {
+        // The same thing measured again: the latest stored reading takes the new value, older copies go.
+        const keep = earlier[earlier.length - 1];
+        const flip = sameReading(keep, m).flip;
+        const changes = {
+            distance: flip ? normalizeAngle(180 - m.distance) : m.distance,
+            raw: flip ? undefined : m.raw,
+            timestamp: nowStamp(),
+            note: m.note || keep.note || '',
+            status: 'active'
+        };
+        const was = formatValue(keep, unit());
+        state.store.updateMeasurement(keep.id, changes);
+        const older = earlier.slice(0, -1);
+        for (const x of older) state.store.deleteMeasurement(x.id);
+        msg = t('updated', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()), was }) + (older.length ? ` ${t('olderRemoved', { n: older.length })}` : '');
+    } else {
+        const measurement = { id: uid('m'), timestamp: nowStamp(), status: 'active', ...m };
+        delete measurement.typed;
+        if (!measurement.raw) delete measurement.raw;
+        state.store.addMeasurement(measurement);
+        msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
+    }
     recompute();
     renderAll();
-    const msg = t('saved', { what: describeMeasurement(m, { heights: false }), d: formatValue(m, unit()) });
     const weak = weakAfterSave(m);
     if (weak) toast(`${msg} ${weak}`, 'warn');
     else toast(check?.status === 'ok' ? `${msg} ✓ ${t('matchesExpected')}` : msg, 'ok');
@@ -460,9 +494,11 @@ function commitMeasurement(m, check, done) {
 // measurements that disagree with it most } or null. Held exactly, such a rule would push the others off.
 function ruleConflict(m) {
     if (state.garden.settings.exactRules === false || !isRule(m) || !state.result) return null;
-    const check = checkMeasurement(state.result.solution, m);
+    const earlier = earlierReadings(m);
+    const check = checkMeasurement(solutionWithout(earlier), m);
     if (check.status !== 'suspect') return null;
-    const trial = solveNetwork(solverInput({ ...state.garden, measurements: [...state.garden.measurements, { ...m, id: '__rule', status: 'active' }] }));
+    const others = state.garden.measurements.filter(x => !earlier.includes(x));
+    const trial = solveNetwork(solverInput({ ...state.garden, measurements: [...others, { ...m, id: '__rule', status: 'active' }] }));
     const worst = [...trial.measurements]
         .filter(([id, r]) => id !== '__rule' && r.used && r.w !== null && Math.abs(r.w) > CRITICAL_W)
         .sort((a, b) => Math.abs(b[1].w) - Math.abs(a[1].w))
@@ -499,7 +535,7 @@ function submitMeasurement(m, done) {
         commitMeasurement(m, { status: 'ok' }, done); // a rule is not a typed number
         return;
     }
-    const check = checkMeasurement(state.result.solution, m);
+    const check = checkMeasurement(solutionWithout(earlierReadings(m)), m);
     if (check.status !== 'suspect') {
         commitMeasurement(m, check, done);
         return;

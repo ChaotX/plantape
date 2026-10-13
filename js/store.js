@@ -515,7 +515,7 @@ export class GoogleStore extends BaseStore {
         if ('visible' in changes) await this.ensureColumn('measurements', TABS.measurements, 'visible');
         const headers = this.headers('measurements');
         const record = measurementToRecord({ ...changes, id });
-        const keyMap = { distance: 'distance', status: 'status', note: 'note', fromH: 'from_h', toH: 'to_h', visible: 'visible' };
+        const keyMap = { distance: 'distance', status: 'status', note: 'note', fromH: 'from_h', toH: 'to_h', visible: 'visible', timestamp: 'timestamp' };
         const data = [];
         for (const [field, column] of Object.entries(keyMap)) {
             if (!(field in changes)) continue;

@@ -190,3 +190,20 @@ test('offset hints from a reference line', () => {
     const t = hints.find(h => h.to === 'T');
     assert.ok(t && Math.abs(t.estimate - 3) < 1e-6 && t.xyPct > 0);
 });
+
+test('sameReading: the same distance, offset or angle, in either direction', async () => {
+    const { sameReading } = await import('../js/solver/observations.js');
+    const d = (from, to, fromH = 0, toH = 0) => ({ from, to, fromH, toH, distance: 5 });
+    assert.deepEqual(sameReading(d('A', 'B'), d('B', 'A')), { flip: false });
+    assert.deepEqual(sameReading(d('A', 'B', 0, 2), d('B', 'A', 2, 0)), { flip: false }, 'heights travel with their end');
+    assert.equal(sameReading(d('A', 'B', 0, 2), d('A', 'B', 2, 0)), null, 'other tape heights: another reading');
+    assert.equal(sameReading(d('A', 'B'), d('A', 'C')), null);
+    const o = (from, fromB, to) => ({ kind: 'offset', from, fromB, to, distance: 1 });
+    assert.deepEqual(sameReading(o('A', 'B', 'P'), o('B', 'A', 'P')), { flip: false });
+    assert.equal(sameReading(o('A', 'B', 'P'), o('A', 'B', 'Q')), null);
+    assert.equal(sameReading(o('A', 'B', 'P'), d('A', 'P')), null, 'another kind');
+    const a = (from, fromB, to, toB) => ({ kind: 'angle', from, fromB, to, toB, distance: 30 });
+    assert.deepEqual(sameReading(a('A', 'B', 'C', 'D'), a('B', 'A', 'D', 'C')), { flip: false });
+    assert.deepEqual(sameReading(a('A', 'B', 'C', 'D'), a('C', 'D', 'A', 'B')), { flip: true }, 'lines picked the other way round');
+    assert.equal(sameReading(a('A', 'B', 'C', 'D'), a('A', 'B', 'C', 'E')), null);
+});

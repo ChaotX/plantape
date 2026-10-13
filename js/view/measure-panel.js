@@ -9,7 +9,7 @@ import { escapeHtml, fmt } from '../util.js';
 import { rowFor, rowForMeasurement } from '../solver/adjust.js';
 import { checkMeasurement, parseDistance } from '../solver/blunders.js';
 import { suggestMeasurements, suggestOffsets, pairKey } from '../solver/planner.js';
-import { kindOf, pointsOfMeasurement, resolveAngle, normalizeAngle, directedAngle, signedOffset } from '../solver/observations.js';
+import { kindOf, pointsOfMeasurement, resolveAngle, normalizeAngle, directedAngle, signedOffset, sameReading } from '../solver/observations.js';
 import { CATEGORY_COLORS } from './plan-view.js';
 import { gainLabel } from './hints-panel.js';
 import { toEntry, fromEntry, formatDistance } from '../units.js';
@@ -132,24 +132,14 @@ export class MeasurePanel {
     // Latest stored (not excluded) measurement of the current selection, in either direction. For angles
     // between the same lines picked the other way round, `flip` says the value reads 180° − θ.
     lastStored() {
-        const { station, stationH, target, targetH } = this.ui;
-        const mode = this.mode;
-        if (!mode) return null;
+        if (!this.mode) return null;
         const cur = this.currentMeasurement();
-        const same = (a, b) => Math.abs((a || 0) - (b || 0)) < 1e-9;
         const list = this.app.state.garden.measurements;
         for (let i = list.length - 1; i >= 0; i--) {
             const m = list[i];
-            if (m.status === 'excluded' || kindOf(m) !== mode) continue;
-            if (mode === 'distance') {
-                if ((m.from === station && m.to === target && same(m.fromH, stationH) && same(m.toH, targetH)) ||
-                    (m.from === target && m.to === station && same(m.fromH, targetH) && same(m.toH, stationH))) return { m };
-            } else if (mode === 'offset') {
-                if (m.to === cur.to && sameLine(m.from, m.fromB, cur.from, cur.fromB)) return { m };
-            } else {
-                if (sameLine(m.from, m.fromB, cur.from, cur.fromB) && sameLine(m.to, m.toB, cur.to, cur.toB)) return { m };
-                if (sameLine(m.from, m.fromB, cur.to, cur.toB) && sameLine(m.to, m.toB, cur.from, cur.fromB)) return { m, flip: true };
-            }
+            if (m.status === 'excluded') continue;
+            const same = sameReading(m, cur);
+            if (same) return { m, flip: same.flip };
         }
         return null;
     }
@@ -366,7 +356,7 @@ export class MeasurePanel {
                     ${input(this.unit)}
                     ${tail}
                     <div class="row">
-                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t('saveMeasurement'))}</button>
+                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t(this.lastStored() ? 'updateMeasurement' : 'saveMeasurement'))}</button>
                         <button type="button" data-action="saveZero" title="${escapeHtml(t('onLineHelp'))}">${escapeHtml(t('onLine'))}</button>
                     </div>
                 </div>`;
@@ -384,7 +374,7 @@ export class MeasurePanel {
                     <div class="muted small" data-part="angleNow"></div>
                     ${tail}
                     <div class="row">
-                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t('saveMeasurement'))}</button>
+                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t(this.lastStored() ? 'updateMeasurement' : 'saveMeasurement'))}</button>
                     </div>
                 </div>`;
         } else {
@@ -396,7 +386,7 @@ export class MeasurePanel {
                     ${input(this.unit)}
                     ${tail}
                     <div class="row">
-                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t('saveMeasurement'))}</button>
+                        <button type="button" class="primary grow" data-action="save">${escapeHtml(t(this.lastStored() ? 'updateMeasurement' : 'saveMeasurement'))}</button>
                         <button type="button" data-action="lineOnly" title="${escapeHtml(t('lineOnlyHelp'))}">${escapeHtml(t('lineOnly'))}</button>
                         <button type="button" class="ghost" data-action="block" title="${escapeHtml(t('blockHelp'))}">${escapeHtml(t('markBlocked'))}</button>
                     </div>

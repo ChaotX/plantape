@@ -15,6 +15,10 @@ It is a static web app (plain JavaScript ES modules, no build step), so it can b
   become measurable.
 - **Measuring assistant:** "I'm at point S" lists the reachable points with estimated distances and the value of
   measuring each one. New points can be named on the spot.
+- **One value per reading:** measuring the same thing again (the same two points at the same tape heights,
+  the same point from the same line, or the same two lines) replaces the stored value; the button then says
+  **Update**, and the new value is checked against the other readings only. Older copies of the same reading
+  are removed then.
 - **Lines and angles:** every measured pair is also a line (a fence, a wall, a side of the house). Measure
   *from a line* the same way as from a point:
   - line → point: the shortest distance of the point from the line; **0 means the point lies on the line**
