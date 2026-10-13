@@ -539,6 +539,13 @@ function alignedSide(corners, [p, q]) {
     return off(corners[1], corners[2]) < off(corners[0], corners[1]) ? 1 : 0;
 }
 
+// Is a–b already drawn as a line: a line without a reading, or a measured distance? A pair only named by a rule
+// (the side of a square corner) is not: nothing shows it, so it can be made a line.
+function hasDrawnLine(a, b) {
+    return (state.garden.lines || []).some(l => sameLine(a, b, l.from, l.to)) ||
+        state.garden.measurements.some(m => kindOf(m) === 'distance' && m.status !== 'excluded' && sameLine(a, b, m.from, m.to));
+}
+
 // Rectangle from four corners: its sides become lines, its corners square, and one side optionally parallel
 // to another line. Readings that already say the same are not added again.
 function rectangleDialog(corners) {
@@ -570,8 +577,8 @@ function rectangleDialog(corners) {
 function addRectangle(corners, parallel) {
     const parallelTo = parallel ? lineEnds(parallel) : null;
     const { lines, measurements } = rectangleMeasurements(corners, { parallelTo, parallelSide: parallelTo ? alignedSide(corners, parallelTo) : 0 });
-    const known = new Set(availableLines(state.garden).map(l => pairKey(...l)));
-    for (const l of lines) if (!known.has(pairKey(l.from, l.to))) state.store.addLine({ ...l, visible: true });
+    // The sides become lines even where they are measured, so deleting a measurement later keeps the side.
+    for (const l of lines) state.store.addLine({ ...l, visible: true });
     const sameAngle = (m, x) => kindOf(x) === 'angle' && x.status !== 'excluded' &&
         ((sameLine(m.from, m.fromB, x.from, x.fromB) && sameLine(m.to, m.toB, x.to, x.toB)) || (sameLine(m.from, m.fromB, x.to, x.toB) && sameLine(m.to, m.toB, x.from, x.fromB)));
     let added = 0;
@@ -733,7 +740,7 @@ const actions = {
     // A line without a reading between two points; it can be drawn on the plan and used in angles and offsets.
     addLine(a, b) {
         if (!a || !b || a === b) return;
-        if (availableLines(state.garden).some(([c, d]) => sameLine(a, b, c, d))) {
+        if (hasDrawnLine(a, b)) {
             toast(t('lineExists', { line: `${a}–${b}` }), 'info');
             return;
         }
